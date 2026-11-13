@@ -5,6 +5,10 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const dns = require('node:dns/promises');
 const net = require('node:net');
+const http = require('node:http');
+
+let staticFfmpegPath = '';
+try { staticFfmpegPath = require('ffmpeg-static') || ''; } catch { /* o binário é opcional na pré-visualização */ }
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
 const RD_OAUTH = 'https://api.real-debrid.com/oauth/v2';
@@ -19,6 +23,7 @@ let mainWindow;
 let authWindow;
 let openSubtitlesSession = null;
 let openSubtitlesLoginPromise = null;
+const audioStreams = new Map();
 
 function apiUrl(base, resource) {
   if (typeof resource !== 'string' || !resource.startsWith('/') || resource.startsWith('//') || resource.includes('\\') || resource.includes('..')) {
@@ -248,6 +253,109 @@ async function openExternalPlayer(streamUrl) {
     throw error;
   }
   return true;
+}
+
+async function findFfmpegExecutable() {
+  const bundledPath = path.join(process.resourcesPath || '', 'ffmpeg', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const candidates = [bundledPath, staticFfmpegPath, 'ffmpeg'].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      if (candidate === 'ffmpeg') return candidate;
+      await fs.access(candidate);
+      return candidate;
+    } catch { /* tenta a seguinte localização */ }
+  }
+  throw new Error('Não encontrei o conversor de áudio da app. Reinstala o StreamNexus para reparar o leitor.');
+}
+
+function validateRealDebridStreamUrl(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { throw new Error('O endereço do vídeo não é válido.'); }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:' || url.username || url.password || !(host.endsWith('.real-debrid.com') || host === 'real-debrid.com' || host.endsWith('.rdeb.io') || host === 'rdeb.io')) {
+    throw new Error('O leitor integrado só aceita ligações seguras do Real-Debrid.');
+  }
+  return url.toString();
+}
+
+async function prepareAudioStream(value) {
+  const sourceUrl = validateRealDebridStreamUrl(value?.url);
+  const executable = await findFfmpegExecutable();
+  const id = randomUUID();
+  const token = randomUUID();
+  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false };
+  stream.server = http.createServer((request, response) => {
+    if (request.url !== `/${token}`) {
+      response.writeHead(404).end();
+      return;
+    }
+    if (request.method !== 'GET' || stream.started) {
+      response.writeHead(409).end();
+      return;
+    }
+    stream.started = true;
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-i', sourceUrl,
+      '-map', '0:v:0?', '-map', '0:a:0?',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+      '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1',
+    ];
+    const child = spawn(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    stream.child = child;
+    let responseStarted = false;
+    let errorOutput = '';
+    const safeErrorOutput = () => errorOutput.replaceAll(sourceUrl, '[link Real-Debrid]').trim();
+    child.stderr.on('data', (chunk) => { errorOutput = `${errorOutput}${chunk}`.slice(-4000); });
+    child.once('error', (error) => {
+      if (response.destroyed) return;
+      if (!responseStarted) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).end(`FFmpeg could not start: ${error.message}`);
+      else response.destroy(error);
+      stream.child = null;
+    });
+    child.stdout.on('data', (chunk) => {
+      if (!responseStarted) {
+        responseStarted = true;
+        response.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'none' });
+        response.flushHeaders();
+      }
+      if (!response.write(chunk)) {
+        child.stdout.pause();
+        response.once('drain', () => child.stdout?.resume());
+      }
+    });
+    child.stdout.once('end', () => { if (responseStarted && !response.destroyed) response.end(); });
+    child.once('close', (code) => {
+      if (code !== 0 && safeErrorOutput()) console.error('[StreamNexus audio]', safeErrorOutput());
+      if (!response.destroyed && !response.writableEnded) {
+        if (!responseStarted) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).end(safeErrorOutput() || 'FFmpeg could not read this stream.');
+        else response.end();
+      }
+      stream.child = null;
+    });
+    response.once('close', () => {
+      if (stream.child && !stream.child.killed) stream.child.kill();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    stream.server.once('error', reject);
+    stream.server.listen(0, '127.0.0.1', resolve);
+  });
+  audioStreams.set(id, stream);
+  const { port } = stream.server.address();
+  return { id, url: `http://127.0.0.1:${port}/${token}` };
+}
+
+async function stopAudioStream(id) {
+  const stream = audioStreams.get(String(id || ''));
+  if (!stream) return false;
+  audioStreams.delete(stream.id);
+  if (stream.child && !stream.child.killed) stream.child.kill();
+  if (stream.server?.listening) await new Promise((resolve) => stream.server.close(resolve));
+  return true;
+}
+
+async function stopAllAudioStreams() {
+  await Promise.all([...audioStreams.keys()].map((id) => stopAudioStream(id)));
 }
 
 function openSubtitlesHeaders(apiKey, token) {
@@ -522,8 +630,8 @@ function configureContentSecurityPolicy() {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: https://image.tmdb.org",
     "font-src 'self' data: https://fonts.gstatic.com",
-    `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173`,
-    "media-src 'self' blob: https:",
+    `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
+    "media-src 'self' blob: https: http://127.0.0.1:*",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",
@@ -556,6 +664,8 @@ function registerIpc() {
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
+  ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
+  ipcMain.handle('player:stop-audio', (_event, id) => stopAudioStream(id));
   ipcMain.handle('window:fullscreen', (_event, enabled) => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     mainWindow.setFullScreen(Boolean(enabled));
@@ -597,6 +707,7 @@ function createMainWindow() {
 }
 
 app.setAppUserModelId('com.streamnexus.desktop');
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.whenReady().then(() => {
   configureContentSecurityPolicy();
   registerIpc();
@@ -607,3 +718,5 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+app.on('before-quit', () => { stopAllAudioStreams().catch(() => {}); });

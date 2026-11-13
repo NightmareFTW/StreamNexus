@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   fetchCatalog: () => invokeRequest('tmdb:catalog'),
   fetchTrailer: (value) => invokeRequest('tmdb:trailer', value),
   openExternalPlayer: (url) => invokeRequest('player:external', url),
+  prepareAudioStream: (url) => invokeRequest('player:prepare-audio', { url }),
+  stopAudioStream: (id) => ipcRenderer.invoke('player:stop-audio', id),
   setFullscreen: (enabled) => ipcRenderer.invoke('window:fullscreen', Boolean(enabled)),
   testTmdb: (value) => invokeRequest('tmdb:test', value),
   testOpenSubtitles: (value) => invokeRequest('opensubtitles:test', value),

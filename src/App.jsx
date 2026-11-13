@@ -144,6 +144,13 @@ function Icon({ name, size = 18, stroke = 1.8 }) {
     bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
     chevron: <path d="m9 18 6-6-6-6"/>,
     play: <path d="m8 5 12 7-12 7z" fill="currentColor" stroke="none"/>,
+    pause: <><path d="M8 5v14M16 5v14" strokeWidth="3"/></>,
+    skipBack: <><path d="M5 5v14" strokeWidth="2.5"/><path d="m19 6-10 6 10 6z" fill="currentColor" stroke="none"/></>,
+    skipForward: <><path d="M19 5v14" strokeWidth="2.5"/><path d="m5 6 10 6-10 6z" fill="currentColor" stroke="none"/></>,
+    volume: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13"/></>,
+    volumeOff: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 5 6m0-6-5 6"/></>,
+    captions: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4m-4 4h3m4-4h3m-3 4h4"/></>,
+    fullscreen: <><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,
     check: <path d="m5 12 4 4L19 6"/>,
     close: <><path d="m18 6-12 12M6 6l12 12"/></>,
@@ -156,6 +163,15 @@ function Icon({ name, size = 18, stroke = 1.8 }) {
     trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></>,
   };
   return <svg {...common}>{paths[name] || paths.spark}</svg>;
+}
+
+function formatPlaybackTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}` : `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
 function readSession() {
@@ -251,6 +267,18 @@ function App() {
   const [trailerPlaying, setTrailerPlaying] = useState(false);
   const trailerRequestRef = useRef(0);
   const playerVideoRef = useRef(null);
+  const audioStreamIdRef = useRef('');
+  const playerControlsTimerRef = useRef(null);
+  const [playerControlsVisible, setPlayerControlsVisible] = useState(true);
+  const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
+  const [playerPlaying, setPlayerPlaying] = useState(false);
+  const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
+  const [playerDuration, setPlayerDuration] = useState(0);
+  const [playerSeekEnd, setPlayerSeekEnd] = useState(0);
+  const [playerVolume, setPlayerVolume] = useState(1);
+  const [playerMuted, setPlayerMuted] = useState(false);
+  const [playerFullscreen, setPlayerFullscreen] = useState(false);
+  const [playerPlaybackError, setPlayerPlaybackError] = useState('');
   const [adultEnabled, setAdultEnabled] = useState(() => {
     try { return localStorage.getItem('streamnexus.settings.adult') === 'true'; } catch { return false; }
   });
@@ -380,11 +408,129 @@ function App() {
   }, [playing?.url, subtitleTrackUrl]);
 
   const isPlayerOpen = modal?.type === 'player';
+  const revealPlayerControls = useCallback(() => {
+    setPlayerControlsVisible(true);
+    window.clearTimeout(playerControlsTimerRef.current);
+    if (isPlayerOpen) {
+      playerControlsTimerRef.current = window.setTimeout(() => {
+        setPlayerControlsVisible(false);
+        setSubtitleMenuOpen(false);
+      }, 3500);
+    }
+  }, [isPlayerOpen]);
+
   useEffect(() => {
     if (!window.streamnexus?.isDesktop) return undefined;
+    setPlayerFullscreen(isPlayerOpen);
     window.streamnexus.setFullscreen(isPlayerOpen).catch(() => {});
     return () => { if (isPlayerOpen) window.streamnexus.setFullscreen(false).catch(() => {}); };
   }, [isPlayerOpen]);
+
+  useEffect(() => {
+    if (!isPlayerOpen) {
+      window.clearTimeout(playerControlsTimerRef.current);
+      setPlayerControlsVisible(true);
+      setSubtitleMenuOpen(false);
+      return undefined;
+    }
+    revealPlayerControls();
+    return () => window.clearTimeout(playerControlsTimerRef.current);
+  }, [isPlayerOpen, revealPlayerControls]);
+
+  useEffect(() => {
+    if (isPlayerOpen) return undefined;
+    const streamId = audioStreamIdRef.current;
+    audioStreamIdRef.current = '';
+    if (streamId) window.streamnexus?.stopAudioStream(streamId).catch(() => {});
+    return undefined;
+  }, [isPlayerOpen]);
+
+  useEffect(() => () => {
+    window.clearTimeout(playerControlsTimerRef.current);
+    const streamId = audioStreamIdRef.current;
+    audioStreamIdRef.current = '';
+    if (streamId) window.streamnexus?.stopAudioStream(streamId).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const video = playerVideoRef.current;
+    if (!isPlayerOpen || !video) return undefined;
+    setPlayerPlaybackError('');
+    const updateTime = () => {
+      setPlayerCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+      setPlayerDuration(Number.isFinite(video.duration) ? video.duration : 0);
+      try { setPlayerSeekEnd(video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0); } catch { setPlayerSeekEnd(0); }
+    };
+    const updatePlayback = () => setPlayerPlaying(!video.paused);
+    const updateVolume = () => { setPlayerVolume(video.volume); setPlayerMuted(video.muted); };
+    updateTime();
+    updatePlayback();
+    updateVolume();
+    video.addEventListener('timeupdate', updateTime);
+    video.addEventListener('durationchange', updateTime);
+    video.addEventListener('loadedmetadata', updateTime);
+    video.addEventListener('play', updatePlayback);
+    video.addEventListener('pause', updatePlayback);
+    video.addEventListener('volumechange', updateVolume);
+    return () => {
+      video.removeEventListener('timeupdate', updateTime);
+      video.removeEventListener('durationchange', updateTime);
+      video.removeEventListener('loadedmetadata', updateTime);
+      video.removeEventListener('play', updatePlayback);
+      video.removeEventListener('pause', updatePlayback);
+      video.removeEventListener('volumechange', updateVolume);
+    };
+  }, [isPlayerOpen, playing?.url]);
+
+  const togglePlayerPlayback = () => {
+    const video = playerVideoRef.current;
+    if (!video) return;
+    if (video.paused) video.play().catch(() => setPlayerPlaybackError('Não foi possível iniciar a reprodução.'));
+    else video.pause();
+    revealPlayerControls();
+  };
+
+  const seekPlayer = (seconds) => {
+    const video = playerVideoRef.current;
+    if (!video) return;
+    const start = video.seekable.length ? video.seekable.start(0) : 0;
+    const end = Number.isFinite(video.duration) ? video.duration : video.seekable.length ? video.seekable.end(video.seekable.length - 1) : video.currentTime;
+    video.currentTime = Math.min(Math.max(video.currentTime + seconds, start), end);
+    revealPlayerControls();
+  };
+
+  const setPlayerSeekPosition = (value) => {
+    const video = playerVideoRef.current;
+    if (!video) return;
+    let start = 0;
+    let end = Number.isFinite(video.duration) ? video.duration : 0;
+    try {
+      if (video.seekable.length) {
+        start = video.seekable.start(0);
+        if (!end) end = video.seekable.end(video.seekable.length - 1);
+      }
+    } catch { return; }
+    if (!end) return;
+    video.currentTime = Math.min(Math.max(Number(value), start), end);
+    revealPlayerControls();
+  };
+
+  const togglePlayerMute = () => {
+    const video = playerVideoRef.current;
+    if (!video) return;
+    const shouldUnmute = video.muted;
+    if (shouldUnmute && video.volume === 0) video.volume = 0.5;
+    video.muted = !shouldUnmute;
+    setPlayerMuted(video.muted);
+    revealPlayerControls();
+  };
+
+  const togglePlayerFullscreen = () => {
+    const next = !playerFullscreen;
+    setPlayerFullscreen(next);
+    window.streamnexus?.setFullscreen(next).catch(() => {});
+    revealPlayerControls();
+  };
 
   useEffect(() => {
     if (!playing?.pending || !playing.torrentId) return undefined;
@@ -397,7 +543,13 @@ function App() {
         if (details.links?.length) {
           const unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
           if (cancelled) return;
-          setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, url: unrestricted.download || details.links[0], pending: false, progress: 100 } : current);
+          const sourceUrl = unrestricted.download || details.links[0];
+          const playbackStream = await preparePlayerAudio(sourceUrl);
+          if (cancelled) {
+            if (playbackStream.id) window.streamnexus?.stopAudioStream(playbackStream.id).catch(() => {});
+            return;
+          }
+          setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, ...playbackStream, pending: false, progress: 100 } : current);
           loadRdAccount();
           return;
         }
@@ -592,6 +744,20 @@ function App() {
     }
   };
 
+  const preparePlayerAudio = async (sourceUrl) => {
+    if (!window.streamnexus?.isDesktop || !sourceUrl) return { url: sourceUrl, sourceUrl };
+    const previousId = audioStreamIdRef.current;
+    audioStreamIdRef.current = '';
+    if (previousId) await window.streamnexus.stopAudioStream(previousId).catch(() => {});
+    try {
+      const stream = await window.streamnexus.prepareAudioStream(sourceUrl);
+      audioStreamIdRef.current = stream.id;
+      return { ...stream, sourceUrl };
+    } catch (error) {
+      return { url: sourceUrl, sourceUrl, audioWarning: getError(error) };
+    }
+  };
+
   const openTorrentStream = async (torrent, titleHint = null) => {
     try {
       let details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
@@ -606,11 +772,13 @@ function App() {
         const data = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
         streamUrl = data.download || details.links[0];
       }
+      const playbackStream = streamUrl ? await preparePlayerAudio(streamUrl) : { url: '', sourceUrl: '' };
       setEmbeddedSubtitleTracks([]);
       setActiveEmbeddedTrack(null);
+      setPlayerPlaybackError('');
       setSubtitleLabel('');
       setTrailerPlaying(false);
-      setPlaying({ title: title.title || fileName, url: streamUrl, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
+      setPlaying({ title: title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
       setModal({ type: 'player' });
       findSubtitles(title, fileName);
       if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.');
@@ -925,8 +1093,6 @@ function App() {
 
             {activePage !== 'home' && <div className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</div>}
 
-            <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
-
             {genre !== 'Todos' && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
             {visibleBrowsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls"><button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button><div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
@@ -950,10 +1116,11 @@ function App() {
             {searchResults.length ? <><div className="catalog-grid">{searchResults.slice(0, visibleCount).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>{visibleCount < searchResults.length && <div className="load-more-wrap"><button className="button button-quiet load-more" onClick={() => setVisibleCount((count) => Math.min(count + 24, searchResults.length))}>Carregar mais títulos <span>{Math.min(24, searchResults.length - visibleCount)} de {searchResults.length - visibleCount}</span></button></div>}</> : <div className="empty-list catalog-empty"><span><Icon name={activePage === 'watchlist' ? 'bookmark' : 'search'} size={22}/></span><strong>{activePage === 'watchlist' ? 'A tua lista ainda está vazia' : 'Não encontrámos esse título'}</strong><p>{activePage === 'watchlist' ? 'Guarda qualquer filme ou série com o botão +.' : 'Experimenta outro título ou género.'}</p>{activePage === 'watchlist' && <button className="text-link" onClick={() => setActivePage('home')}>Explorar catálogo <Icon name="chevron" size={14}/></button>}</div>}
           </section>
         )}
+        {['home', 'films', 'series'].includes(activePage) && !query && <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>}
         <footer className="footer"><span>© 2026 StreamNexus</span><span>Este produto usa a API do TMDB e não é endossado nem certificado pelo TMDB.</span><button onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Integrações <Icon name="settings" size={13}/></button></footer>
       </main>
 
-      {notice && <div className="toast"><span className="toast-check"><Icon name="check" size={14}/></span>{notice}</div>}
+      {notice && !isPlayerOpen && <div className="toast"><span className="toast-check"><Icon name="check" size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
         {modal.type === 'details' && selectedTitle && <div className="detail-modal modal-card">
@@ -1024,26 +1191,40 @@ function App() {
 
         {modal.type === 'downloads' && <div className="modal-card small-confirm"><div className="modal-emblem magnet-emblem"><Icon name="cloud" size={24}/></div><span className="eyebrow">REAL-DEBRID</span><h2>Magnet enviado</h2><p>O conteúdo foi enviado para a tua conta. A transferência pode demorar alguns instantes a ficar pronta.</p><div className="small-confirm-actions"><button className="button button-quiet" onClick={() => setModal(null)}>Fechar</button><button className="button button-primary" onClick={() => { setModal(null); setActivePage('downloads'); loadRdAccount(); }}>Ver biblioteca <Icon name="chevron" size={14}/></button></div></div>}
 
-        {modal.type === 'player' && <div className="player-modal modal-card">
-          <button className="modal-close player-close" aria-label="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close"/></button>
+        {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} controls autoPlay src={playing.url} onError={() => notify('O leitor integrado não consegue reproduzir este formato. Experimenta abrir com VLC.')}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.url} onClick={togglePlayerPlayback} onError={() => setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.')}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>Confirma a ligação ou tenta abrir o ficheiro original.</span>{playing?.sourceUrl && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
-          <div className="player-caption"><div><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong>{/\b(AC3|EAC3|DDP|DTS|TRUEHD|ATMOS)\b/i.test(playing?.fileName || '') && <small className="audio-hint">Este ficheiro indica áudio AC3, EAC3 ou DTS. Se o som ficar indisponível, usa o VLC.</small>}</div><div className="player-tools"><span className="quality-tag">REAL-DEBRID</span>{playing?.url && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.url); } catch (error) { notify(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div></div>
-          <section className="subtitle-panel">
-            <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
-            {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={() => { Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { track.mode = 'disabled'; }); setActiveEmbeddedTrack(null); setSubtitleLabel(''); setSubtitleStatus('found'); }}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
-            {embeddedSubtitleTracks.length === 0 && /\b(subs?|subtitles?|legendas?)\b/i.test(playing?.fileName || '') && <p className="subtitle-message">O nome do ficheiro indica legendas embutidas, mas o leitor não expôs essas faixas. Experimenta “Abrir com VLC” para as selecionar.</p>}
-            {subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}
-            {subtitleStatus === 'downloading' && <p className="subtitle-message"><span className="spinner"></span>A descarregar a legenda…</p>}
-            {subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}
-            {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
-            {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda carregada. Ativa-a no menu de legendas do leitor.</p>}
-            {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
-            {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
-            {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></span></button>)}</div>}
-          </section>
+          <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
+            <div className="player-topbar">
+              <div className="player-title"><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong>{playing?.audioWarning && <small className="audio-hint">O áudio pode não ser compatível. {playing.audioWarning} Também podes abrir com VLC.</small>}</div>
+              <div className="player-top-actions"><span className="quality-tag">REAL-DEBRID</span>{playing?.sourceUrl && <button className="player-icon-button" aria-label="Abrir com VLC" title="Abrir com VLC" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={19}/></button>}<button className="player-icon-button" aria-label="Fechar filme" title="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close" size={21}/></button></div>
+            </div>
+
+            {subtitleMenuOpen && <section className="subtitle-panel">
+              <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
+              {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={() => { Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { track.mode = 'disabled'; }); setActiveEmbeddedTrack(null); setSubtitleLabel(''); setSubtitleStatus('found'); }}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
+              {embeddedSubtitleTracks.length === 0 && /\b(subs?|subtitles?|legendas?)\b/i.test(playing?.fileName || '') && <p className="subtitle-message">O leitor web não expôs as legendas embutidas neste ficheiro. Podes selecioná-las ao abrir com VLC.</p>}
+              {subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}
+              {subtitleStatus === 'downloading' && <p className="subtitle-message"><span className="spinner"></span>A descarregar a legenda…</p>}
+              {subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}
+              {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
+              {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda carregada. Ativa-a pelo botão de legendas.</p>}
+              {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
+              {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
+              {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></span></button>)}</div>}
+            </section>}
+
+            <div className="player-bottom">
+              <input className="player-seek" aria-label="Posição do filme" type="range" min="0" max={playerDuration || playerSeekEnd || 1} step="0.1" value={playerDuration || playerSeekEnd ? Math.min(playerCurrentTime, playerDuration || playerSeekEnd) : 0} disabled={!playerDuration && !playerSeekEnd} onChange={(event) => setPlayerSeekPosition(event.target.value)}/>
+              <div className="player-control-row">
+                <div className="player-control-group"><button className="player-icon-button" aria-label={playerPlaying ? 'Pausar' : 'Reproduzir'} onClick={togglePlayerPlayback}><Icon name={playerPlaying ? 'pause' : 'play'} size={21}/></button><button className="player-icon-button" aria-label="Recuar 10 segundos" onClick={() => seekPlayer(-10)}><Icon name="skipBack" size={20}/></button><button className="player-icon-button" aria-label="Avançar 10 segundos" onClick={() => seekPlayer(10)}><Icon name="skipForward" size={20}/></button><span className="player-time">{formatPlaybackTime(playerCurrentTime)} <i>/</i> {playerDuration ? formatPlaybackTime(playerDuration) : 'AO VIVO'}</span></div>
+                <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/><button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
+              </div>
+            </div>
+          </div>
         </div>}
       </div>}
     </div>
