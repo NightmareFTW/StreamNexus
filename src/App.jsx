@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
 const RD_OAUTH = 'https://api.real-debrid.com/oauth/v2';
@@ -71,9 +71,52 @@ const nav = [
   { id: 'home', label: 'Descobrir', icon: 'compass' },
   { id: 'films', label: 'Filmes', icon: 'film' },
   { id: 'series', label: 'Séries', icon: 'tv' },
-  { id: 'indexers', label: 'Pesquisar fontes', icon: 'search' },
-  { id: 'watchlist', label: 'A minha lista', icon: 'bookmark' },
+  { id: 'music', label: 'Música', icon: 'music' },
+  { id: 'books', label: 'Livros', icon: 'book' },
+  { id: 'adult', label: 'Adultos', icon: 'adult' },
+  { id: 'indexers', label: 'Pesquisar', icon: 'search' },
 ];
+
+const DISCOVERY_COLLECTIONS = {
+  music: [
+    { title: 'Álbuns populares', subtitle: 'Os sons que estão a rodar', query: 'popular album', icon: 'music', accent: 'red' },
+    { title: 'Bandas sonoras', subtitle: 'Música para cada história', query: 'soundtrack', icon: 'spark', accent: 'gold' },
+    { title: 'Rock e metal', subtitle: 'Guitarras no máximo', query: 'rock album', icon: 'music', accent: 'blue' },
+    { title: 'Pop', subtitle: 'Novos singles e álbuns', query: 'pop album', icon: 'spark', accent: 'pink' },
+    { title: 'Eletrónica', subtitle: 'Ritmos para continuar', query: 'electronic album', icon: 'music', accent: 'violet' },
+    { title: 'Jazz e clássica', subtitle: 'Escuta sem pressa', query: 'jazz classical album', icon: 'music', accent: 'green' },
+  ],
+  books: [
+    { title: 'Mais procurados', subtitle: 'Leituras em destaque', query: 'bestseller book', icon: 'book', accent: 'gold' },
+    { title: 'Fantasia', subtitle: 'Mundos para descobrir', query: 'fantasy novel', icon: 'spark', accent: 'violet' },
+    { title: 'Ficção científica', subtitle: 'Outros mundos, outras ideias', query: 'science fiction novel', icon: 'spark', accent: 'blue' },
+    { title: 'Mistério e crime', subtitle: 'Histórias cheias de pistas', query: 'mystery crime novel', icon: 'book', accent: 'red' },
+    { title: 'Romance', subtitle: 'Histórias de encontros', query: 'romance novel', icon: 'book', accent: 'pink' },
+    { title: 'Banda desenhada', subtitle: 'Comics, manga e novelas gráficas', query: 'comic manga', icon: 'book', accent: 'green' },
+  ],
+  adult: [
+    { title: 'Filmes recentes', subtitle: 'Novidades dos indexadores', query: '1080p', icon: 'film', accent: 'red' },
+    { title: 'Alta definição', subtitle: 'Qualidade 1080p', query: '1080p x264', icon: 'film', accent: 'blue' },
+    { title: '4K UHD', subtitle: 'Imagem de alta resolução', query: '2160p 4K', icon: 'film', accent: 'gold' },
+    { title: 'Séries', subtitle: 'Episódios e temporadas', query: 'S01 1080p', icon: 'tv', accent: 'violet' },
+    { title: 'VR', subtitle: 'Realidade virtual', query: 'VR 180', icon: 'spark', accent: 'green' },
+    { title: 'Animação', subtitle: 'Animação adulta', query: 'adult animation', icon: 'spark', accent: 'pink' },
+  ],
+};
+
+function makeDistinctShelves(shelves, excludedIds = [], limit = 12) {
+  const seen = new Set(excludedIds);
+  return shelves.map((shelf) => {
+    const items = [];
+    for (const item of shelf.items || []) {
+      if (!item?.id || seen.has(item.id) || !item.poster) continue;
+      seen.add(item.id);
+      items.push(item);
+      if (items.length >= limit) break;
+    }
+    return { ...shelf, items };
+  }).filter((shelf) => shelf.items.length > 0);
+}
 
 function Icon({ name, size = 18, stroke = 1.8 }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: stroke, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true };
@@ -165,6 +208,12 @@ function App() {
   const [query, setQuery] = useState('');
   const [genre, setGenre] = useState('Todos');
   const [modal, setModal] = useState(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef(null);
+  const collectionRequestRef = useRef('');
+  const lastBrowsePageRef = useRef(activePage);
+  const browseVisitRef = useRef(0);
+  const releaseRequestRef = useRef(0);
   const [notice, setNotice] = useState('');
   const [session, setSession] = useState(readSession);
   const [rdUser, setRdUser] = useState(null);
@@ -274,13 +323,19 @@ function App() {
     refreshCatalog();
   }, [integrationSettings.tmdbApiKey]);
 
-  const featuredTitles = catalogRows?.trending?.length ? catalogRows.trending : catalogTitles;
+  const featuredTitles = activePage === 'films'
+    ? (catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme'))
+    : activePage === 'series'
+      ? (catalogRows?.popularSeries?.length ? catalogRows.popularSeries : catalogTitles.filter((item) => item.type === 'Série'))
+      : (catalogRows?.trending?.length ? catalogRows.trending : catalogTitles);
   const featuredTitle = featuredTitles[heroIndex % Math.max(featuredTitles.length, 1)] || titles[0];
   useEffect(() => {
-    if (activePage !== 'home' || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
+    if (!['home', 'films', 'series'].includes(activePage) || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
     const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % featuredTitles.length), 8500);
     return () => window.clearInterval(timer);
   }, [activePage, featuredTitles.length, query, genre]);
+
+  useEffect(() => { setHeroIndex(0); }, [activePage]);
 
   useEffect(() => {
     if (!subtitleTrackUrl) return undefined;
@@ -304,16 +359,26 @@ function App() {
     const onShortcut = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        document.querySelector('.search-box input')?.focus();
+        if (activePage !== 'indexers') setActivePage('indexers');
+        window.setTimeout(() => document.querySelector('#indexer-query')?.focus(), 0);
       }
       if (event.key === 'Escape') {
         if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); }
         setModal(null);
+        setProfileMenuOpen(false);
       }
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, [modal]);
+  }, [activePage, modal]);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event) => {
+      if (!profileMenuRef.current?.contains(event.target)) setProfileMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', closeOnOutsideClick);
+    return () => window.removeEventListener('pointerdown', closeOnOutsideClick);
+  }, []);
 
   useEffect(() => {
     if (!deviceAuth) return undefined;
@@ -507,14 +572,30 @@ function App() {
   };
 
   const selectedTitle = catalogTitles.find((item) => item.id === modal?.id);
-  const pageTitle = activePage === 'films' ? 'Filmes' : activePage === 'series' ? 'Séries' : activePage === 'watchlist' ? 'A minha lista' : 'Descobrir';
+  const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const readyTorrents = rdItems.filter((item) => item.status === 'downloaded');
-  const homeShelves = [
-    { eyebrow: 'A TENDÊNCIA DA SEMANA', title: 'Em alta agora', items: catalogRows?.trending?.length ? catalogRows.trending : catalogTitles, page: 'films' },
-    { eyebrow: 'ESTREIAS RECENTES', title: 'Filmes para descobrir', items: catalogRows?.nowPlaying?.length ? catalogRows.nowPlaying : catalogTitles.filter((item) => item.type === 'Filme'), page: 'films' },
-    { eyebrow: 'NOVOS EPISÓDIOS', title: 'Séries em destaque', items: catalogRows?.airingSeries?.length ? catalogRows.airingSeries : catalogTitles.filter((item) => item.type === 'Série'), page: 'series' },
-    { eyebrow: 'MAIS BEM AVALIADOS', title: 'Favoritos do público', items: [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])].length ? [...catalogRows.topMovies, ...catalogRows.topSeries] : catalogTitles, page: 'films', ranked: true },
-  ].filter((shelf) => shelf.items?.length);
+  const browsingShelves = activePage === 'films'
+    ? makeDistinctShelves([
+      { eyebrow: 'EM ALTA', title: 'Filmes populares', items: catalogRows?.trending?.filter((item) => item.type === 'Filme')?.length ? catalogRows.trending.filter((item) => item.type === 'Filme') : catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme'), page: 'films' },
+        { eyebrow: 'TENDÊNCIAS', title: 'Populares no StreamNexus', items: catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme').slice().reverse(), page: 'films' },
+      { eyebrow: 'NO CINEMA E EM CASA', title: 'Estreias recentes', items: catalogRows?.nowPlaying?.length ? catalogRows.nowPlaying : catalogTitles.filter((item) => item.type === 'Filme'), page: 'films' },
+      { eyebrow: 'ESCOLHIDOS PARA TI', title: 'Mais bem avaliados', items: catalogRows?.topMovies?.length ? catalogRows.topMovies : [...catalogTitles].filter((item) => item.type === 'Filme').sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'films', ranked: true },
+    ], [featuredTitle.id])
+    : activePage === 'series'
+      ? makeDistinctShelves([
+        { eyebrow: 'EM ALTA', title: 'Séries populares', items: catalogRows?.trending?.filter((item) => item.type === 'Série')?.length ? catalogRows.trending.filter((item) => item.type === 'Série') : catalogRows?.popularSeries?.length ? catalogRows.popularSeries : catalogTitles.filter((item) => item.type === 'Série'), page: 'series' },
+        { eyebrow: 'TENDÊNCIAS', title: 'Séries populares no StreamNexus', items: catalogRows?.popularSeries?.length ? catalogRows.popularSeries : catalogTitles.filter((item) => item.type === 'Série').slice().reverse(), page: 'series' },
+        { eyebrow: 'NOVOS EPISÓDIOS', title: 'Séries a acompanhar', items: catalogRows?.airingSeries?.length ? catalogRows.airingSeries : catalogTitles.filter((item) => item.type === 'Série'), page: 'series' },
+        { eyebrow: 'ESCOLHIDOS PARA TI', title: 'Mais bem avaliadas', items: catalogRows?.topSeries?.length ? catalogRows.topSeries : [...catalogTitles].filter((item) => item.type === 'Série').sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'series', ranked: true },
+      ], [featuredTitle.id])
+      : makeDistinctShelves([
+        { eyebrow: 'A TENDÊNCIA DA SEMANA', title: 'Em alta agora', items: catalogRows?.trending?.length ? catalogRows.trending : [...catalogTitles].sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'films' },
+        { eyebrow: 'FILMES MAIS VISTOS', title: 'Populares no StreamNexus', items: catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme').slice().reverse(), page: 'films' },
+        { eyebrow: 'ESTREIAS RECENTES', title: 'Filmes para descobrir', items: catalogRows?.nowPlaying?.length ? catalogRows.nowPlaying : catalogTitles.filter((item) => item.type === 'Filme'), page: 'films' },
+        { eyebrow: 'SÉRIES MAIS VISTAS', title: 'Séries populares', items: catalogRows?.popularSeries?.length ? catalogRows.popularSeries : catalogTitles.filter((item) => item.type === 'Série').slice().reverse(), page: 'series' },
+        { eyebrow: 'NOVOS EPISÓDIOS', title: 'Séries em destaque', items: catalogRows?.airingSeries?.length ? catalogRows.airingSeries : catalogTitles.filter((item) => item.type === 'Série'), page: 'series' },
+        { eyebrow: 'MAIS BEM AVALIADOS', title: 'Favoritos do público', items: [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])].length ? [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])] : [...catalogTitles].sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'films', ranked: true },
+      ], [featuredTitle.id]);
 
   const searchTitleInLibrary = async (title) => {
     if (!session?.access_token) {
@@ -533,11 +614,16 @@ function App() {
     }
   };
 
-  const searchReleaseSources = async (queryText, categoryKey, titleId = null) => {
+  const searchReleaseSources = async (queryText, categoryKey, titleId = null, collectionTitle = '') => {
     const category = SEARCH_CATEGORIES[categoryKey] || SEARCH_CATEGORIES.movies;
     const queryValue = String(queryText || '').trim();
     if (!queryValue) return;
-    setReleaseSearch({ titleId, categoryKey, status: 'loading', items: [] });
+    const requestId = ++releaseRequestRef.current;
+    if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey) {
+      setReleaseSearch({ titleId, categoryKey, collectionTitle, query: queryValue, status: 'error', items: [], message: 'Configura o endereço e a API key do Prowlarr nas definições para pesquisar.' });
+      return;
+    }
+    setReleaseSearch({ titleId, categoryKey, collectionTitle, query: queryValue, status: 'loading', items: [] });
     try {
       let items;
       if (window.streamnexus?.isDesktop) {
@@ -549,11 +635,27 @@ function App() {
         if (!response.ok) throw new Error(`Prowlarr respondeu com erro ${response.status}.`);
         items = (await response.json()).map((release) => ({ ...release, id: release.guid || release.downloadUrl || release.title, canGrab: Boolean(release.magnetUrl || release.downloadUrl), hasMagnet: Boolean(release.magnetUrl) }));
       }
-      setReleaseSearch({ titleId, categoryKey, status: items.length ? 'found' : 'empty', items });
+      if (requestId !== releaseRequestRef.current) return;
+      setReleaseSearch({ titleId, categoryKey, collectionTitle, query: queryValue, status: items.length ? 'found' : 'empty', items });
     } catch (error) {
-      setReleaseSearch({ titleId, categoryKey, status: 'error', items: [], message: getError(error) });
+      if (requestId !== releaseRequestRef.current) return;
+      setReleaseSearch({ titleId, categoryKey, collectionTitle, query: queryValue, status: 'error', items: [], message: getError(error) });
     }
   };
+
+  useEffect(() => {
+    if (!['music', 'books', 'adult'].includes(activePage) || (activePage === 'adult' && !adultEnabled)) return;
+    if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey || (releaseSearch?.categoryKey === activePage && releaseSearch?.collectionTitle && releaseSearch.status !== 'error')) return;
+    if (lastBrowsePageRef.current !== activePage) {
+      lastBrowsePageRef.current = activePage;
+      browseVisitRef.current += 1;
+    }
+    const firstCollection = DISCOVERY_COLLECTIONS[activePage][0];
+    const requestKey = `${activePage}:${browseVisitRef.current}:${firstCollection.title}`;
+    if (collectionRequestRef.current === requestKey) return;
+    collectionRequestRef.current = requestKey;
+    searchReleaseSources(firstCollection.query, activePage, null, firstCollection.title);
+  }, [activePage, adultEnabled, integrationSettings.prowlarrUrl, integrationSettings.prowlarrApiKey, releaseSearch?.categoryKey]);
 
   const saveIntegrationSettings = async (event) => {
     event.preventDefault();
@@ -656,54 +758,27 @@ function App() {
         </a>
 
         <div className="side-section">
-          <p className="side-label">A tua biblioteca</p>
           <nav className="side-nav" aria-label="Navegação principal">
-            {nav.map((item) => <button key={item.id} className={`nav-item ${activePage === item.id && item.id !== 'indexers' ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span>{item.id === 'watchlist' && saved.length > 0 && <small>{saved.length}</small>}</button>)}
-            <button className={`nav-item ${activePage === 'downloads' ? 'active' : ''}`} onClick={() => { setActivePage('downloads'); loadRdAccount(); }}><Icon name="download" size={18}/><span>Real-Debrid</span>{readyTorrents.length > 0 && <small>{readyTorrents.length}</small>}</button>
+            {nav.map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
           </nav>
         </div>
-
-        <div className="side-section genre-section">
-          <p className="side-label">À tua medida</p>
-          <button className="nav-item" onClick={() => { setActivePage('home'); setGenre('Ficção científica'); }}><span className="genre-dot purple"></span><span>Ficção científica</span></button>
-          <button className="nav-item" onClick={() => { setActivePage('home'); setGenre('Drama'); }}><span className="genre-dot blue"></span><span>Drama</span></button>
-          <button className="nav-item" onClick={() => { setActivePage('home'); setGenre('Animação'); }}><span className="genre-dot orange"></span><span>Animação</span></button>
-          <button className="nav-item" onClick={() => { setActivePage('home'); setGenre('Mistério'); }}><span className="genre-dot green"></span><span>Mistério</span></button>
-        </div>
-
-        <div className="side-section source-section">
-          <p className="side-label">Pesquisar por tipo</p>
-          <nav className="side-nav" aria-label="Tipos de pesquisa Prowlarr">
-            {Object.entries(SEARCH_CATEGORIES).filter(([key]) => key !== 'adult' || adultEnabled).map(([key, item]) => <button key={key} className={`nav-item ${activePage === 'indexers' && searchCategory === key ? 'active' : ''}`} onClick={() => { setActivePage('indexers'); setSearchCategory(key); setReleaseSearch(null); }}><Icon name={item.icon} size={16}/><span>{item.label}</span><small>{item.manager}</small></button>)}
-          </nav>
-        </div>
-
-        <div className="sidebar-bottom">
-          <div className={`rd-card ${session?.access_token ? 'connected' : ''}`}>
-            <div className="rd-card-top"><span className="rd-mini-icon"><Icon name="cloud" size={17}/></span><span className="rd-card-status"><i></i>{session?.access_token ? 'Ligado' : 'Integração'}</span><button className="more-button" aria-label="Opções Real-Debrid" onClick={() => setModal({ type: 'connect' })}>•••</button></div>
-            <strong>{session?.access_token ? rdUser?.username || 'A tua conta' : 'Real-Debrid'}</strong>
-            <p>{session?.access_token ? 'A tua biblioteca, num só lugar.' : 'Liga a tua conta para reproduzir.'}</p>
-            {!session?.access_token && <button className="rd-connect-small" onClick={() => setModal({ type: 'connect' })}>Ligar conta <Icon name="chevron" size={14}/></button>}
-          </div>
-            <button className="profile-button" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>
-            <span className="avatar">{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</span>
-            <span className="profile-copy"><strong>{rdUser?.username || 'O teu perfil'}</strong><small>{session?.access_token ? rdUser?.type === 'premium' ? 'Real-Debrid Premium' : 'Real-Debrid' : 'Conta local'}</small></span>
-            <Icon name="settings" size={16}/>
+        <div className="profile-menu-wrap header-profile" ref={profileMenuRef}>
+          <button className={`profile-trigger ${profileMenuOpen ? 'is-open' : ''}`} aria-haspopup="menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen((open) => !open)}>
+            <span className="top-avatar">{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</span>
+            <span className="profile-trigger-name">{rdUser?.username || 'Perfil'}</span><Icon name="chevron" size={14}/>
           </button>
+          {profileMenuOpen && <div className="profile-menu" role="menu">
+            <div className="profile-menu-identity"><span className="top-avatar">{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</span><span><strong>{rdUser?.username || 'StreamNexus'}</strong><small>{session?.access_token ? (rdUser?.type === 'premium' ? 'Real-Debrid Premium' : 'Real-Debrid ligado') : 'Conta local'}</small></span></div>
+            <div className="profile-menu-divider"></div>
+            <button role="menuitem" onClick={() => { setActivePage('watchlist'); setProfileMenuOpen(false); }}><Icon name="bookmark" size={16}/>A minha lista{saved.length > 0 && <small>{saved.length}</small>}</button>
+            <button role="menuitem" onClick={() => { setActivePage('downloads'); setProfileMenuOpen(false); loadRdAccount(); }}><Icon name="cloud" size={16}/>Real-Debrid{session?.access_token && <small>{readyTorrents.length} prontos</small>}</button>
+            <div className="profile-menu-divider"></div>
+            <button role="menuitem" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setProfileMenuOpen(false); setModal({ type: 'integrations' }); }}><Icon name="settings" size={16}/>Definições e integrações</button>
+          </div>}
         </div>
       </aside>
 
       <main className="main-content" id="top">
-        <header className="topbar">
-          <div className="breadcrumbs"><span>STREAMNEXUS</span><Icon name="chevron" size={13}/><strong>{activePage === 'downloads' ? 'REAL-DEBRID' : activePage === 'indexers' ? 'PESQUISA DE LANÇAMENTOS' : pageTitle.toUpperCase()}</strong></div>
-          <div className="topbar-right">
-            <label className={`search-box ${query ? 'has-value' : ''}`}><Icon name="search" size={18}/><input aria-label="Pesquisar títulos" placeholder="Títulos, géneros…" value={query} onChange={(event) => { setQuery(event.target.value); if (activePage === 'downloads') setActivePage('home'); }}/><kbd>⌘ K</kbd></label>
-            {activePage === 'home' && <button className="icon-button catalog-refresh" aria-label="Atualizar catálogo" title="Atualizar tendências e estreias" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}><Icon name="refresh" size={17}/></button>}
-            <button className="icon-button notification-button" aria-label="Notificações" onClick={() => notify(session?.access_token ? 'A tua conta está sincronizada.' : 'Liga o Real-Debrid para sincronizar a biblioteca.')}><Icon name="bell"/><i></i></button>
-            <button className="top-avatar" onClick={() => setModal({ type: 'connect' })}>{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</button>
-          </div>
-        </header>
-
         {activePage === 'indexers' ? (
           <section className="indexer-page page-in">
             <div className="page-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> PROWLARR · REAL-DEBRID</span><h1>Pesquisar lançamentos</h1><p>Pesquisa nos indexadores configurados no Prowlarr e envia a tua escolha para a nuvem Real-Debrid.</p></div><button className="button button-quiet" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}><Icon name="settings" size={15}/>Configurar Prowlarr</button></div>
@@ -726,23 +801,31 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
-        ) : activePage === 'home' && !query && genre === 'Todos' ? (
-          <div className="home-page page-in">
+        ) : ['home', 'films', 'series'].includes(activePage) && !query && genre === 'Todos' ? (
+          <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
             <section className="hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
-              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'} <span className="hero-kicker-line"></span> {featuredTitle.type.toUpperCase()}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta"><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i><span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}><Icon name="play" size={17}/>Ver agora</button><button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button><button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
+              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'} {featuredTitle.type.toUpperCase()}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta"><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i><span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}><Icon name="play" size={17}/>Ver agora</button><button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button><button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>
 
             <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-            {homeShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
+            {browsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls"><button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button><div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
               <div className={`poster-row ${shelf.ranked ? 'ranked-row' : ''}`}>{shelf.items.map((item, index) => <PosterCard key={item.id} item={item} index={index} rank={shelf.ranked ? index + 1 : null} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>
             </section>)}
 
             <section className="wide-promo"><div className="promo-orbit one"></div><div className="promo-orbit two"></div><div className="promo-copy"><span className="eyebrow"><span className="pulse-dot"></span> UMA SÓ CASA PARA TUDO O QUE VÊS</span><h2>A tua coleção.<br/><span>Sem fronteiras.</span></h2><p>Liga o Real-Debrid para trazer a tua biblioteca e os teus links para aqui.</p><button className="button button-light" onClick={() => setModal({ type: 'connect' })}>{session?.access_token ? 'Gerir integração' : 'Ligar Real-Debrid'} <Icon name="chevron" size={15}/></button></div><div className="promo-art"><span className="promo-disc disc-one"></span><span className="promo-disc disc-two"></span><span className="promo-card-art"><Icon name="play" size={24}/></span></div></section>
           </div>
+        ) : ['music', 'books', 'adult'].includes(activePage) ? (
+          <section className="media-browse-page page-in">
+            <div className="media-browse-heading"><div><span className="eyebrow">A TUA PRÓXIMA DESCOBERTA</span><h1>{pageTitle}</h1><p>{activePage === 'music' ? 'Álbuns, bandas sonoras e sons para todos os momentos.' : activePage === 'books' ? 'Encontra a próxima história para ler.' : 'Explora conteúdos adultos através das categorias configuradas no Prowlarr.'}</p></div><span className="media-browse-emblem"><Icon name={SEARCH_CATEGORIES[activePage].icon} size={25}/></span></div>
+            {activePage === 'adult' && !adultEnabled ? <div className="browse-gate"><span className="browse-gate-icon"><Icon name="adult" size={25}/></span><div><strong>Pesquisa desativada</strong><p>Ativa a categoria Adultos nas definições quando quiseres usá-la.</p></div><button className="button button-primary" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Abrir definições <Icon name="settings" size={14}/></button></div> : <>
+              <div className="collection-grid">{DISCOVERY_COLLECTIONS[activePage].map((collection) => <button key={collection.title} className={`collection-card accent-${collection.accent} ${releaseSearch?.collectionTitle === collection.title ? 'selected' : ''}`} onClick={() => searchReleaseSources(collection.query, activePage, null, collection.title)}><span className="collection-icon"><Icon name={collection.icon} size={20}/></span><span className="collection-card-copy"><strong>{collection.title}</strong><small>{collection.subtitle}</small></span><Icon name="chevron" size={17}/></button>)}</div>
+              {!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey ? <div className="browse-setup-note"><Icon name="link" size={17}/><span>Configura o Prowlarr para carregar resultados nestas coleções.</span><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar <Icon name="chevron" size={13}/></button></div> : <section className="release-panel collection-results-panel"><div className="release-panel-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> {SEARCH_CATEGORIES[activePage].manager.toUpperCase()} · PROWLARR</span><strong>{releaseSearch?.categoryKey === activePage && releaseSearch.collectionTitle ? releaseSearch.collectionTitle : 'A carregar uma coleção'}</strong></div></div><ReleaseSearchResults search={releaseSearch?.categoryKey === activePage && !releaseSearch.titleId && releaseSearch.collectionTitle ? releaseSearch : null} categoryKey={activePage} connected={Boolean(session?.access_token)} busyId={releaseBusyId} onAdd={grabRelease}/></section>}
+            </>}
+          </section>
         ) : (
           <section className="catalog-page page-in">
             <div className="page-heading"><div><span className="eyebrow">O UNIVERSO É TEU</span><h1>{query ? 'Resultados da pesquisa' : pageTitle}</h1><p>{query ? `O que encontrámos para “${query}”.` : activePage === 'watchlist' ? 'Os títulos que guardaste para ver mais tarde.' : 'Escolhe a próxima história para a tua noite.'}</p></div><div className="catalog-filter"><label htmlFor="genre-select">Género</label><select id="genre-select" value={genre} onChange={(event) => setGenre(event.target.value)}><option>Todos</option><option>Ficção científica</option><option>Drama</option><option>Ação</option><option>Animação</option><option>Fantasia</option><option>Mistério</option><option>Comédia</option><option>Documentário</option></select></div></div>
@@ -842,7 +925,7 @@ function ReleaseSearchResults({ search, categoryKey, connected, busyId, onAdd })
   if (search.status === 'error') return <div className="release-results-state is-error"><Icon name="alert" size={17}/><p>{search.message}</p></div>;
   if (search.status === 'empty') return <div className="release-results-state"><Icon name="search" size={17}/><p>Sem resultados. Verifica se tens indexadores configurados para a categoria {category.label.toLowerCase()} no Prowlarr.</p></div>;
   return <div className="release-results">
-    <div className="release-results-heading"><strong>{search.items.length} {search.items.length === 1 ? 'lançamento encontrado' : 'lançamentos encontrados'}</strong><span>{category.manager} · Prowlarr</span></div>
+    <div className="release-results-heading"><strong>{search.collectionTitle ? `${search.collectionTitle}: ` : ''}{search.items.length} {search.items.length === 1 ? 'lançamento encontrado' : 'lançamentos encontrados'}</strong><span>{category.manager} · Prowlarr{search.query ? ` · ${search.query}` : ''}</span></div>
     <div className="release-results-list">{visibleItems.map((release) => <article className="release-card" key={release.id}><div className="release-info"><strong title={release.title}>{release.title}</strong><span>{release.indexer} <i>·</i> {formatBytes(release.size)} <i>·</i> {release.seeders == null ? 'Seeders n/d' : `${release.seeders} seeders`}</span></div><span className={`release-source ${release.hasMagnet ? 'has-magnet' : ''}`}>{release.hasMagnet ? 'MAGNET' : 'TORRENT'}</span><button className="button button-primary button-sm" disabled={!release.canGrab || busyId === release.id} onClick={() => onAdd(release)}><Icon name={busyId === release.id ? 'refresh' : 'cloud'} size={14}/>{busyId === release.id ? 'A enviar…' : connected ? 'Adicionar ao RD' : 'Ligar RD'}</button></article>)}</div>
     {totalPages > 1 && <div className="release-pagination"><span>{firstItem + 1}-{Math.min(firstItem + pageSize, search.items.length)} de {search.items.length}</span><div><button className="button button-quiet" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Anterior</button><small>{page} / {totalPages}</small><button className="button button-quiet" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>Seguinte</button></div></div>}
   </div>;
