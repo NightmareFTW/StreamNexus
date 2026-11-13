@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   searchReleases: (value) => invokeRequest('prowlarr:search', value),
   testProwlarr: (value) => invokeRequest('prowlarr:test', value),
   addReleaseToRealDebrid: (value) => invokeRequest('prowlarr:add-release', value),
+  fetchCatalog: () => invokeRequest('tmdb:catalog'),
+  testTmdb: (value) => invokeRequest('tmdb:test', value),
+  testOpenSubtitles: (value) => invokeRequest('opensubtitles:test', value),
+  searchSubtitles: (value) => invokeRequest('opensubtitles:search', value),
+  downloadSubtitle: (value) => invokeRequest('opensubtitles:download', value),
 }));

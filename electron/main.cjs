@@ -7,6 +7,8 @@ const net = require('node:net');
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
 const RD_OAUTH = 'https://api.real-debrid.com/oauth/v2';
+const TMDB_API = 'https://api.themoviedb.org/3';
+const OPENSUBTITLES_API = 'https://api.opensubtitles.com/api/v1';
 const SESSION_FILE = 'real-debrid-session.bin';
 const INTEGRATIONS_FILE = 'integrations.bin';
 const DEV_URL = 'http://127.0.0.1:5173';
@@ -14,6 +16,8 @@ const releaseCache = new Map();
 
 let mainWindow;
 let authWindow;
+let openSubtitlesSession = null;
+let openSubtitlesLoginPromise = null;
 
 function apiUrl(base, resource) {
   if (typeof resource !== 'string' || !resource.startsWith('/') || resource.startsWith('//') || resource.includes('\\') || resource.includes('..')) {
@@ -92,9 +96,9 @@ async function readIntegrations() {
     const encrypted = await fs.readFile(integrationsFilePath());
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
     const { result } = await safeStorage.decryptStringAsync(encrypted);
-    return JSON.parse(result);
+    return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
   } catch (error) {
-    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '' };
+    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
     throw error;
   }
 }
@@ -103,6 +107,10 @@ async function writeIntegrations(value) {
   const settings = {
     prowlarrUrl: String(value?.prowlarrUrl || '').trim().replace(/\/+$/, ''),
     prowlarrApiKey: String(value?.prowlarrApiKey || '').trim(),
+    tmdbApiKey: String(value?.tmdbApiKey || '').trim(),
+    openSubtitlesApiKey: String(value?.openSubtitlesApiKey || '').trim(),
+    openSubtitlesUsername: String(value?.openSubtitlesUsername || '').trim(),
+    openSubtitlesPassword: String(value?.openSubtitlesPassword || ''),
   };
   if (settings.prowlarrUrl) {
     let url;
@@ -113,7 +121,142 @@ async function writeIntegrations(value) {
   const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(settings));
   await fs.mkdir(path.dirname(integrationsFilePath()), { recursive: true });
   await fs.writeFile(integrationsFilePath(), encrypted);
+  openSubtitlesSession = null;
   return { configured: Boolean(settings.prowlarrUrl && settings.prowlarrApiKey) };
+}
+
+async function tmdbRequest(resource, apiKey) {
+  const url = new URL(`${TMDB_API}${resource}`);
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.status_message || `TMDB respondeu com erro ${response.status}.`);
+  return data;
+}
+
+function tmdbImage(pathname, size, baseUrl) {
+  return pathname && baseUrl ? `${baseUrl}${size}${pathname}` : '';
+}
+
+const TMDB_GENRES = {
+  28: 'Ação', 12: 'Aventura', 16: 'Animação', 35: 'Comédia', 80: 'Crime', 99: 'Documentário',
+  18: 'Drama', 10751: 'Família', 14: 'Fantasia', 36: 'História', 27: 'Terror', 10402: 'Música',
+  9648: 'Mistério', 10749: 'Romance', 878: 'Ficção científica', 10770: 'TV', 53: 'Thriller',
+  10752: 'Guerra', 37: 'Western', 10759: 'Ação e aventura', 10762: 'Infantil', 10763: 'Notícias',
+  10764: 'Reality', 10765: 'Ficção científica', 10766: 'Novela', 10767: 'Talk show', 10768: 'Guerra',
+};
+
+function normalizeTmdbItem(item, baseUrl, sizes) {
+  const isMovie = item.media_type === 'movie' || Boolean(item.title);
+  const title = item.title || item.name || item.original_title || item.original_name || 'Sem título';
+  const original = item.original_title || item.original_name || title;
+  const date = item.release_date || item.first_air_date || '';
+  const type = isMovie ? 'Filme' : 'Série';
+  return {
+    id: `${isMovie ? 'movie' : 'tv'}-${item.id}`, tmdbId: item.id, tmdbType: isMovie ? 'movie' : 'tv',
+    title, original, type, year: date ? Number(date.slice(0, 4)) : '',
+    rating: Number(item.vote_average || 0).toFixed(1), genre: (item.genre_ids || []).map((id) => TMDB_GENRES[id]).find(Boolean) || 'Drama',
+    runtime: isMovie ? 'Filme' : 'Série', poster: tmdbImage(item.poster_path, sizes.poster, baseUrl),
+    backdrop: tmdbImage(item.backdrop_path || item.poster_path, sizes.backdrop, baseUrl),
+    description: item.overview || 'Descobre mais sobre este título.', accent: '#b30d1b',
+  };
+}
+
+async function fetchTmdbCatalog() {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para atualizar o catálogo.');
+  const config = await tmdbRequest('/configuration', tmdbApiKey);
+  const baseUrl = config.images?.secure_base_url || 'https://image.tmdb.org/t/p/';
+  const sizes = { poster: 'w500', backdrop: 'w1280' };
+  const language = 'pt-PT';
+  const region = 'PT';
+  const paths = {
+    trending: `/trending/all/week?language=${language}&region=${region}`,
+    popularMovies: `/movie/popular?language=${language}&region=${region}`,
+    popularSeries: `/tv/popular?language=${language}&region=${region}`,
+    topMovies: `/movie/top_rated?language=${language}&region=${region}`,
+    topSeries: `/tv/top_rated?language=${language}&region=${region}`,
+    nowPlaying: `/movie/now_playing?language=${language}&region=${region}`,
+    airingSeries: `/tv/on_the_air?language=${language}`,
+  };
+  const entries = await Promise.all(Object.entries(paths).map(async ([key, resource]) => [key, await tmdbRequest(resource, tmdbApiKey)]));
+  const rows = Object.fromEntries(entries.map(([key, data]) => [key, (data.results || []).map((item) => normalizeTmdbItem(item, baseUrl, sizes))]));
+  const unique = new Map();
+  Object.values(rows).flat().forEach((item) => { if (!unique.has(item.id)) unique.set(item.id, item); });
+  return { rows, titles: [...unique.values()] };
+}
+
+function openSubtitlesHeaders(apiKey, token) {
+  return { 'Api-Key': apiKey, 'User-Agent': 'StreamNexus v0.1.0', Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+async function openSubtitlesLogin(settings) {
+  if (!settings.openSubtitlesApiKey || !settings.openSubtitlesUsername || !settings.openSubtitlesPassword) {
+    throw new Error('Preenche a API key, o utilizador e a palavra-passe do OpenSubtitles.');
+  }
+  if (openSubtitlesSession?.expiresAt > Date.now()) return openSubtitlesSession.token;
+  if (openSubtitlesLoginPromise) return openSubtitlesLoginPromise;
+  openSubtitlesLoginPromise = (async () => {
+    const response = await fetch(`${OPENSUBTITLES_API}/login`, {
+      method: 'POST', headers: { ...openSubtitlesHeaders(settings.openSubtitlesApiKey), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: settings.openSubtitlesUsername, password: settings.openSubtitlesPassword }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.token) throw new Error(data?.message || `OpenSubtitles respondeu com erro ${response.status}.`);
+    openSubtitlesSession = { token: data.token, expiresAt: Date.now() + 20 * 60 * 60 * 1000 };
+    return data.token;
+  })();
+  try { return await openSubtitlesLoginPromise; } finally { openSubtitlesLoginPromise = null; }
+}
+
+async function testTmdb(value = {}) {
+  const apiKey = String(value.tmdbApiKey || '').trim();
+  if (!apiKey) throw new Error('Indica a API key do TMDB.');
+  await tmdbRequest('/configuration', apiKey);
+  return { appName: 'TMDB' };
+}
+
+async function testOpenSubtitles(value = {}) {
+  const settings = { ...(await readIntegrations()), ...value };
+  await openSubtitlesLogin(settings);
+  return { appName: 'OpenSubtitles' };
+}
+
+async function searchOpenSubtitles(value = {}) {
+  const settings = await readIntegrations();
+  if (!settings.openSubtitlesApiKey) throw new Error('Adiciona a API key do OpenSubtitles em Integrações.');
+  const params = new URLSearchParams({ languages: 'pt-PT,pt-BR', order_by: 'download_count', order_direction: 'desc' });
+  if (value.tmdbId) {
+    if (value.tmdbType === 'tv') params.set('parent_tmdb_id', String(value.tmdbId));
+    else params.set('tmdb_id', String(value.tmdbId));
+  }
+  if (value.query) params.set('query', String(value.query).slice(0, 160));
+  const response = await fetch(`${OPENSUBTITLES_API}/subtitles?${params}`, { headers: openSubtitlesHeaders(settings.openSubtitlesApiKey) });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.message || `OpenSubtitles respondeu com erro ${response.status}.`);
+  return (data?.data || []).flatMap((entry) => {
+    const attr = entry.attributes || {};
+    return (attr.files || []).map((file) => ({
+      fileId: file.file_id, fileName: file.file_name || attr.release || 'Legenda',
+      language: attr.language || '', label: attr.language === 'pt-PT' ? 'Português de Portugal' : attr.language === 'pt-BR' ? 'Português do Brasil' : attr.language,
+      release: attr.release || '', downloads: Number(attr.download_count || 0), hearingImpaired: Boolean(attr.hearing_impaired),
+    }));
+  }).filter((item) => item.fileId).sort((a, b) => (a.language === 'pt-PT' ? -1 : 0) - (b.language === 'pt-PT' ? -1 : 0) || b.downloads - a.downloads).slice(0, 30);
+}
+
+async function downloadOpenSubtitle(value = {}) {
+  const settings = await readIntegrations();
+  const token = await openSubtitlesLogin(settings);
+  const response = await fetch(`${OPENSUBTITLES_API}/download`, {
+    method: 'POST', headers: { ...openSubtitlesHeaders(settings.openSubtitlesApiKey, token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_id: Number(value.fileId), sub_format: 'srt' }),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.link) throw new Error(data?.message || `Não foi possível obter a legenda (HTTP ${response.status}).`);
+  const downloadUrl = new URL(data.link);
+  if (downloadUrl.protocol !== 'https:' || !downloadUrl.hostname.endsWith('opensubtitles.com')) throw new Error('O OpenSubtitles devolveu um endereço de legenda inválido.');
+  const subtitleResponse = await fetch(downloadUrl);
+  if (!subtitleResponse.ok) throw new Error(`A transferência da legenda falhou (HTTP ${subtitleResponse.status}).`);
+  return { text: await subtitleResponse.text(), fileName: value.fileName || 'subtitle.srt' };
 }
 
 function pURL(base, pathname) {
@@ -142,9 +285,9 @@ async function searchProwlarr({ query, type, categories = [] } = {}) {
   const rows = data.filter((release) => {
     const protocol = String(release.protocol || '').toLowerCase();
     return ['torrent', '1'].includes(protocol) || (!protocol && (String(release.magnetUrl || '').startsWith('magnet:') || String(release.downloadUrl || '').startsWith('magnet:')));
-  }).slice(0, 120).map((release) => {
+  }).map((release) => {
     const id = randomUUID();
-    if (releaseCache.size > 400) releaseCache.delete(releaseCache.keys().next().value);
+    if (releaseCache.size > 5000) releaseCache.delete(releaseCache.keys().next().value);
     releaseCache.set(id, { release, baseUrl: settings.prowlarrUrl, apiKey: settings.prowlarrApiKey });
     return {
       id,
@@ -337,6 +480,11 @@ function registerIpc() {
   ipcMain.handle('prowlarr:search', resultHandler(searchProwlarr));
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
+  ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
+  ipcMain.handle('tmdb:test', resultHandler(testTmdb));
+  ipcMain.handle('opensubtitles:test', resultHandler(testOpenSubtitles));
+  ipcMain.handle('opensubtitles:search', resultHandler(searchOpenSubtitles));
+  ipcMain.handle('opensubtitles:download', resultHandler(downloadOpenSubtitle));
 }
 
 function createMainWindow() {
