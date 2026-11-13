@@ -11,6 +11,7 @@ const SEARCH_CATEGORIES = {
   books: { label: 'Livros', manager: 'Readarr', type: 'book', category: '7000', icon: 'book' },
   adult: { label: 'Adulto', manager: 'Whisparr', type: 'search', category: '6000', icon: 'adult' },
 };
+const PAGE_SEARCH_CATEGORY = { tv: 'series' };
 
 function normalizeSearchText(value = '') {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -71,6 +72,7 @@ const nav = [
   { id: 'home', label: 'Descobrir', icon: 'compass' },
   { id: 'films', label: 'Filmes', icon: 'film' },
   { id: 'series', label: 'Séries', icon: 'tv' },
+  { id: 'tv', label: 'TV', icon: 'tv' },
   { id: 'music', label: 'Música', icon: 'music' },
   { id: 'books', label: 'Livros', icon: 'book' },
   { id: 'adult', label: 'Adultos', icon: 'adult' },
@@ -78,6 +80,14 @@ const nav = [
 ];
 
 const DISCOVERY_COLLECTIONS = {
+  tv: [
+    { title: 'Episódios recentes', subtitle: 'Novos episódios e temporadas', query: 'S01 1080p', icon: 'tv', accent: 'red' },
+    { title: 'Séries populares', subtitle: 'As séries mais procuradas', query: 'popular TV series', icon: 'spark', accent: 'gold' },
+    { title: 'Animação', subtitle: 'Animação para todos os públicos', query: 'animated series', icon: 'spark', accent: 'violet' },
+    { title: 'Documentários', subtitle: 'Histórias reais em episódios', query: 'documentary series', icon: 'film', accent: 'blue' },
+    { title: 'Reality e competição', subtitle: 'Programas e concursos', query: 'reality TV show', icon: 'tv', accent: 'pink' },
+    { title: 'Minisséries', subtitle: 'Histórias completas numa temporada', query: 'miniseries 1080p', icon: 'book', accent: 'green' },
+  ],
   music: [
     { title: 'Álbuns populares', subtitle: 'Os sons que estão a rodar', query: 'popular album', icon: 'music', accent: 'red' },
     { title: 'Bandas sonoras', subtitle: 'Música para cada história', query: 'soundtrack', icon: 'spark', accent: 'gold' },
@@ -235,6 +245,12 @@ function App() {
   const [subtitleTrackUrl, setSubtitleTrackUrl] = useState('');
   const [subtitleLabel, setSubtitleLabel] = useState('');
   const [subtitleLanguage, setSubtitleLanguage] = useState('pt-PT');
+  const [embeddedSubtitleTracks, setEmbeddedSubtitleTracks] = useState([]);
+  const [activeEmbeddedTrack, setActiveEmbeddedTrack] = useState(null);
+  const [trailer, setTrailer] = useState({ status: 'idle', key: '', name: '' });
+  const [trailerPlaying, setTrailerPlaying] = useState(false);
+  const trailerRequestRef = useRef(0);
+  const playerVideoRef = useRef(null);
   const [adultEnabled, setAdultEnabled] = useState(() => {
     try { return localStorage.getItem('streamnexus.settings.adult') === 'true'; } catch { return false; }
   });
@@ -341,6 +357,65 @@ function App() {
     if (!subtitleTrackUrl) return undefined;
     return () => URL.revokeObjectURL(subtitleTrackUrl);
   }, [subtitleTrackUrl]);
+
+  useEffect(() => {
+    const video = playerVideoRef.current;
+    const trackList = video?.textTracks;
+    if (!trackList) return undefined;
+    const updateTracks = () => {
+      const originalTracks = Array.from(trackList).filter((track) => ['subtitles', 'captions'].includes(track.kind) && !String(track.label || '').startsWith('OpenSubtitles ·'));
+      setEmbeddedSubtitleTracks(originalTracks);
+      setActiveEmbeddedTrack(originalTracks.find((track) => track.mode === 'showing') || null);
+    };
+    trackList.addEventListener?.('addtrack', updateTracks);
+    trackList.addEventListener?.('change', updateTracks);
+    video.addEventListener('loadedmetadata', updateTracks);
+    const timer = window.setTimeout(updateTracks, 350);
+    return () => {
+      window.clearTimeout(timer);
+      trackList.removeEventListener?.('addtrack', updateTracks);
+      trackList.removeEventListener?.('change', updateTracks);
+      video.removeEventListener('loadedmetadata', updateTracks);
+    };
+  }, [playing?.url, subtitleTrackUrl]);
+
+  const isPlayerOpen = modal?.type === 'player';
+  useEffect(() => {
+    if (!window.streamnexus?.isDesktop) return undefined;
+    window.streamnexus.setFullscreen(isPlayerOpen).catch(() => {});
+    return () => { if (isPlayerOpen) window.streamnexus.setFullscreen(false).catch(() => {}); };
+  }, [isPlayerOpen]);
+
+  useEffect(() => {
+    if (!playing?.pending || !playing.torrentId) return undefined;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const details = await callRd(`/torrents/info/${encodeURIComponent(playing.torrentId)}`);
+        if (cancelled) return;
+        if (details.links?.length) {
+          const unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
+          if (cancelled) return;
+          setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, url: unrestricted.download || details.links[0], pending: false, progress: 100 } : current);
+          loadRdAccount();
+          return;
+        }
+        if (['dead', 'error', 'virus', 'magnet_error'].includes(details.status)) {
+          setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, pending: false, error: 'O Real-Debrid não conseguiu preparar este ficheiro.' } : current);
+          return;
+        }
+        setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, progress: Number(details.progress || 0), transferStatus: details.status } : current);
+        timer = window.setTimeout(poll, 7000);
+      } catch (error) {
+        if (cancelled) return;
+        setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: getError(error) } : current);
+        timer = window.setTimeout(poll, 12000);
+      }
+    };
+    poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [playing?.pending, playing?.torrentId, callRd, loadRdAccount]);
 
   useEffect(() => {
     if (window.streamnexus?.isDesktop) {
@@ -506,8 +581,10 @@ function App() {
       if (!vtt.startsWith('WEBVTT')) vtt = `WEBVTT\n\n${vtt}`;
       const blob = new Blob([vtt], { type: 'text/vtt;charset=utf-8' });
       setSubtitleTrackUrl(URL.createObjectURL(blob));
-      setSubtitleLabel(subtitle.label || subtitle.language || 'Legenda');
+      setSubtitleLabel(`OpenSubtitles · ${subtitle.label || subtitle.language || 'Legenda'}`);
       setSubtitleLanguage(subtitle.language || 'pt-PT');
+      setActiveEmbeddedTrack(null);
+      setEmbeddedSubtitleTracks((tracks) => tracks.map((track) => { track.mode = 'disabled'; return track; }));
       setSubtitleStatus('selected');
     } catch (error) {
       setSubtitleError(getError(error));
@@ -517,20 +594,37 @@ function App() {
 
   const openTorrentStream = async (torrent, titleHint = null) => {
     try {
-      const details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
-      if (details.status === 'waiting_files_selection' || !details.links?.length) {
-        notify('Este conteúdo ainda não está pronto para reproduzir.');
-        await selectTorrentFiles(torrent.id);
-        return;
+      let details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
+      if (details.status === 'waiting_files_selection') {
+        await callRd(`/torrents/selectFiles/${encodeURIComponent(torrent.id)}`, { method: 'POST', body: { files: 'all' } });
+        details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
       }
-      const selectedLink = details.links[0];
-      const data = await callRd('/unrestrict/link', { method: 'POST', body: { link: selectedLink } });
       const fileName = torrent.filename || details.filename || 'O teu conteúdo';
       const title = titleHint || { title: fileName, original: fileName };
-      setPlaying({ title: title.title || fileName, url: data.download || selectedLink, metadata: title, fileName });
+      let streamUrl = '';
+      if (details.links?.length) {
+        const data = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
+        streamUrl = data.download || details.links[0];
+      }
+      setEmbeddedSubtitleTracks([]);
+      setActiveEmbeddedTrack(null);
+      setSubtitleLabel('');
+      setTrailerPlaying(false);
+      setPlaying({ title: title.title || fileName, url: streamUrl, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
       setModal({ type: 'player' });
       findSubtitles(title, fileName);
+      if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.');
     } catch (error) { setRdError(getError(error)); notify(getError(error)); }
+  };
+
+  const selectEmbeddedSubtitle = (track) => {
+    const video = playerVideoRef.current;
+    if (!video?.textTracks) return;
+    Array.from(video.textTracks).forEach((item) => { item.mode = item === track ? 'showing' : 'disabled'; });
+    setSubtitleTrackUrl('');
+    setActiveEmbeddedTrack(track);
+    setSubtitleLabel(track.label || track.language || 'Legendas originais do ficheiro');
+    setSubtitleStatus('original');
   };
 
   const toggleSaved = (id) => {
@@ -549,7 +643,7 @@ function App() {
       const search = normalizeSearchText(query);
       result = result.filter((item) => normalizeSearchText(`${item.title} ${item.original} ${(item.aliases || []).join(' ')} ${item.genre} ${item.type}`).includes(search));
     }
-    if (genre !== 'Todos') result = result.filter((item) => item.genre === genre);
+    if (genre !== 'Todos') result = result.filter((item) => item.genre === genre || item.genres?.includes(genre));
     return result;
   }, [activePage, catalogTitles, genre, query, saved]);
 
@@ -572,7 +666,10 @@ function App() {
   };
 
   const selectedTitle = catalogTitles.find((item) => item.id === modal?.id);
-  const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
+  const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
+  const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
+  const genreTitles = activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
+  const browseGenres = [...new Set(genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-PT'));
   const readyTorrents = rdItems.filter((item) => item.status === 'downloaded');
   const browsingShelves = activePage === 'films'
     ? makeDistinctShelves([
@@ -596,6 +693,10 @@ function App() {
         { eyebrow: 'NOVOS EPISÓDIOS', title: 'Séries em destaque', items: catalogRows?.airingSeries?.length ? catalogRows.airingSeries : catalogTitles.filter((item) => item.type === 'Série'), page: 'series' },
         { eyebrow: 'MAIS BEM AVALIADOS', title: 'Favoritos do público', items: [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])].length ? [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])] : [...catalogTitles].sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'films', ranked: true },
       ], [featuredTitle.id]);
+
+  const visibleBrowsingShelves = genre === 'Todos' ? browsingShelves : makeDistinctShelves(
+    browsingShelves.map((shelf) => ({ ...shelf, items: shelf.items.filter((item) => item.genre === genre || item.genres?.includes(genre)) })),
+  []);
 
   const searchTitleInLibrary = async (title) => {
     if (!session?.access_token) {
@@ -644,8 +745,9 @@ function App() {
   };
 
   useEffect(() => {
-    if (!['music', 'books', 'adult'].includes(activePage) || (activePage === 'adult' && !adultEnabled)) return;
-    if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey || (releaseSearch?.categoryKey === activePage && releaseSearch?.collectionTitle && releaseSearch.status !== 'error')) return;
+    if (!['tv', 'music', 'books', 'adult'].includes(activePage) || (activePage === 'adult' && !adultEnabled)) return;
+    const categoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
+    if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey || (releaseSearch?.categoryKey === categoryKey && releaseSearch?.collectionTitle && releaseSearch.status !== 'error')) return;
     if (lastBrowsePageRef.current !== activePage) {
       lastBrowsePageRef.current = activePage;
       browseVisitRef.current += 1;
@@ -654,7 +756,7 @@ function App() {
     const requestKey = `${activePage}:${browseVisitRef.current}:${firstCollection.title}`;
     if (collectionRequestRef.current === requestKey) return;
     collectionRequestRef.current = requestKey;
-    searchReleaseSources(firstCollection.query, activePage, null, firstCollection.title);
+    searchReleaseSources(firstCollection.query, categoryKey, null, firstCollection.title);
   }, [activePage, adultEnabled, integrationSettings.prowlarrUrl, integrationSettings.prowlarrApiKey, releaseSearch?.categoryKey]);
 
   const saveIntegrationSettings = async (event) => {
@@ -739,6 +841,18 @@ function App() {
 
   const openDetails = (title) => {
     setModal({ type: 'details', id: title.id });
+    setTrailer({ status: 'loading', key: '', name: '' });
+    setTrailerPlaying(false);
+    const requestId = ++trailerRequestRef.current;
+    if (!window.streamnexus?.isDesktop || !integrationSettings.tmdbApiKey) {
+      setTrailer({ status: 'unavailable', key: '', name: '' });
+    } else {
+      window.streamnexus.fetchTrailer({ id: title.tmdbId, type: title.tmdbType || (title.type === 'Série' ? 'tv' : 'movie'), title: title.original || title.title, year: title.year })
+        .then((result) => {
+          if (requestId === trailerRequestRef.current) setTrailer(result?.key ? { status: 'ready', key: result.key, name: result.name || 'Trailer' } : { status: 'empty', key: '', name: '' });
+        })
+        .catch(() => { if (requestId === trailerRequestRef.current) setTrailer({ status: 'error', key: '', name: '' }); });
+    }
     searchTitleInLibrary(title);
     searchReleaseSources(title.original || title.title, title.type === 'Série' ? 'series' : 'movies', title.id);
   };
@@ -801,34 +915,37 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
-        ) : ['home', 'films', 'series'].includes(activePage) && !query && genre === 'Todos' ? (
+        ) : ['home', 'films', 'series'].includes(activePage) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
-            <section className="hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
+            {genre === 'Todos' && <section className="hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
               <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'} {featuredTitle.type.toUpperCase()}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta"><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i><span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}><Icon name="play" size={17}/>Ver agora</button><button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button><button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
-            </section>
+            </section>}
+
+            {activePage !== 'home' && <div className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</div>}
 
             <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-            {browsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
+            {genre !== 'Todos' && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
+            {visibleBrowsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls"><button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button><div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
               <div className={`poster-row ${shelf.ranked ? 'ranked-row' : ''}`}>{shelf.items.map((item, index) => <PosterCard key={item.id} item={item} index={index} rank={shelf.ranked ? index + 1 : null} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>
             </section>)}
 
-            <section className="wide-promo"><div className="promo-orbit one"></div><div className="promo-orbit two"></div><div className="promo-copy"><span className="eyebrow"><span className="pulse-dot"></span> UMA SÓ CASA PARA TUDO O QUE VÊS</span><h2>A tua coleção.<br/><span>Sem fronteiras.</span></h2><p>Liga o Real-Debrid para trazer a tua biblioteca e os teus links para aqui.</p><button className="button button-light" onClick={() => setModal({ type: 'connect' })}>{session?.access_token ? 'Gerir integração' : 'Ligar Real-Debrid'} <Icon name="chevron" size={15}/></button></div><div className="promo-art"><span className="promo-disc disc-one"></span><span className="promo-disc disc-two"></span><span className="promo-card-art"><Icon name="play" size={24}/></span></div></section>
+            {activePage === 'home' && <section className="wide-promo"><div className="promo-orbit one"></div><div className="promo-orbit two"></div><div className="promo-copy"><span className="eyebrow"><span className="pulse-dot"></span> UMA SÓ CASA PARA TUDO O QUE VÊS</span><h2>A tua coleção.<br/><span>Sem fronteiras.</span></h2><p>Liga o Real-Debrid para trazer a tua biblioteca e os teus links para aqui.</p><button className="button button-light" onClick={() => setModal({ type: 'connect' })}>{session?.access_token ? 'Gerir integração' : 'Ligar Real-Debrid'} <Icon name="chevron" size={15}/></button></div><div className="promo-art"><span className="promo-disc disc-one"></span><span className="promo-disc disc-two"></span><span className="promo-card-art"><Icon name="play" size={24}/></span></div></section>}
           </div>
-        ) : ['music', 'books', 'adult'].includes(activePage) ? (
+        ) : ['tv', 'music', 'books', 'adult'].includes(activePage) ? (
           <section className="media-browse-page page-in">
-            <div className="media-browse-heading"><div><span className="eyebrow">A TUA PRÓXIMA DESCOBERTA</span><h1>{pageTitle}</h1><p>{activePage === 'music' ? 'Álbuns, bandas sonoras e sons para todos os momentos.' : activePage === 'books' ? 'Encontra a próxima história para ler.' : 'Explora conteúdos adultos através das categorias configuradas no Prowlarr.'}</p></div><span className="media-browse-emblem"><Icon name={SEARCH_CATEGORIES[activePage].icon} size={25}/></span></div>
+            <div className="media-browse-heading"><div><span className="eyebrow">A TUA PRÓXIMA DESCOBERTA</span><h1>{pageTitle}</h1><p>{activePage === 'tv' ? 'Episódios, programas e minisséries encontrados nos teus indexadores.' : activePage === 'music' ? 'Álbuns, bandas sonoras e sons para todos os momentos.' : activePage === 'books' ? 'Encontra a próxima história para ler.' : 'Explora conteúdos adultos através das categorias configuradas no Prowlarr.'}</p></div><span className="media-browse-emblem"><Icon name={SEARCH_CATEGORIES[browseCategoryKey].icon} size={25}/></span></div>
             {activePage === 'adult' && !adultEnabled ? <div className="browse-gate"><span className="browse-gate-icon"><Icon name="adult" size={25}/></span><div><strong>Pesquisa desativada</strong><p>Ativa a categoria Adultos nas definições quando quiseres usá-la.</p></div><button className="button button-primary" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Abrir definições <Icon name="settings" size={14}/></button></div> : <>
-              <div className="collection-grid">{DISCOVERY_COLLECTIONS[activePage].map((collection) => <button key={collection.title} className={`collection-card accent-${collection.accent} ${releaseSearch?.collectionTitle === collection.title ? 'selected' : ''}`} onClick={() => searchReleaseSources(collection.query, activePage, null, collection.title)}><span className="collection-icon"><Icon name={collection.icon} size={20}/></span><span className="collection-card-copy"><strong>{collection.title}</strong><small>{collection.subtitle}</small></span><Icon name="chevron" size={17}/></button>)}</div>
-              {!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey ? <div className="browse-setup-note"><Icon name="link" size={17}/><span>Configura o Prowlarr para carregar resultados nestas coleções.</span><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar <Icon name="chevron" size={13}/></button></div> : <section className="release-panel collection-results-panel"><div className="release-panel-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> {SEARCH_CATEGORIES[activePage].manager.toUpperCase()} · PROWLARR</span><strong>{releaseSearch?.categoryKey === activePage && releaseSearch.collectionTitle ? releaseSearch.collectionTitle : 'A carregar uma coleção'}</strong></div></div><ReleaseSearchResults search={releaseSearch?.categoryKey === activePage && !releaseSearch.titleId && releaseSearch.collectionTitle ? releaseSearch : null} categoryKey={activePage} connected={Boolean(session?.access_token)} busyId={releaseBusyId} onAdd={grabRelease}/></section>}
+              <div className="collection-grid">{DISCOVERY_COLLECTIONS[activePage].map((collection) => <button key={collection.title} className={`collection-card accent-${collection.accent} ${releaseSearch?.collectionTitle === collection.title ? 'selected' : ''}`} onClick={() => searchReleaseSources(collection.query, browseCategoryKey, null, collection.title)}><span className="collection-icon"><Icon name={collection.icon} size={20}/></span><span className="collection-card-copy"><strong>{collection.title}</strong><small>{collection.subtitle}</small></span><Icon name="chevron" size={17}/></button>)}</div>
+              {!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey ? <div className="browse-setup-note"><Icon name="link" size={17}/><span>Configura o Prowlarr para carregar resultados nestas coleções.</span><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar <Icon name="chevron" size={13}/></button></div> : <section className="release-panel collection-results-panel"><div className="release-panel-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> {SEARCH_CATEGORIES[browseCategoryKey].manager.toUpperCase()} · PROWLARR</span><strong>{releaseSearch?.categoryKey === browseCategoryKey && releaseSearch.collectionTitle ? releaseSearch.collectionTitle : 'A carregar uma coleção'}</strong></div></div><ReleaseSearchResults search={releaseSearch?.categoryKey === browseCategoryKey && !releaseSearch.titleId && releaseSearch.collectionTitle ? releaseSearch : null} categoryKey={browseCategoryKey} connected={Boolean(session?.access_token)} busyId={releaseBusyId} onAdd={grabRelease}/></section>}
             </>}
           </section>
         ) : (
           <section className="catalog-page page-in">
-            <div className="page-heading"><div><span className="eyebrow">O UNIVERSO É TEU</span><h1>{query ? 'Resultados da pesquisa' : pageTitle}</h1><p>{query ? `O que encontrámos para “${query}”.` : activePage === 'watchlist' ? 'Os títulos que guardaste para ver mais tarde.' : 'Escolhe a próxima história para a tua noite.'}</p></div><div className="catalog-filter"><label htmlFor="genre-select">Género</label><select id="genre-select" value={genre} onChange={(event) => setGenre(event.target.value)}><option>Todos</option><option>Ficção científica</option><option>Drama</option><option>Ação</option><option>Animação</option><option>Fantasia</option><option>Mistério</option><option>Comédia</option><option>Documentário</option></select></div></div>
+            <div className="page-heading"><div><span className="eyebrow">O UNIVERSO É TEU</span><h1>{query ? 'Resultados da pesquisa' : pageTitle}</h1><p>{query ? `O que encontrámos para “${query}”.` : activePage === 'watchlist' ? 'Os títulos que guardaste para ver mais tarde.' : 'Escolhe a próxima história para a tua noite.'}</p></div>{['films', 'series'].includes(activePage) && <div className="catalog-filter"><label htmlFor="genre-select">Género</label><select id="genre-select" value={genre} onChange={(event) => setGenre(event.target.value)}><option>Todos</option>{browseGenres.map((category) => <option key={category}>{category}</option>)}</select></div>}</div>
             <div className="catalog-summary"><span>{searchResults.length} {searchResults.length === 1 ? 'título' : 'títulos'}</span><div className="active-filter"><span></span>Para descobrir</div></div>
             {searchResults.length ? <><div className="catalog-grid">{searchResults.slice(0, visibleCount).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>{visibleCount < searchResults.length && <div className="load-more-wrap"><button className="button button-quiet load-more" onClick={() => setVisibleCount((count) => Math.min(count + 24, searchResults.length))}>Carregar mais títulos <span>{Math.min(24, searchResults.length - visibleCount)} de {searchResults.length - visibleCount}</span></button></div>}</> : <div className="empty-list catalog-empty"><span><Icon name={activePage === 'watchlist' ? 'bookmark' : 'search'} size={22}/></span><strong>{activePage === 'watchlist' ? 'A tua lista ainda está vazia' : 'Não encontrámos esse título'}</strong><p>{activePage === 'watchlist' ? 'Guarda qualquer filme ou série com o botão +.' : 'Experimenta outro título ou género.'}</p>{activePage === 'watchlist' && <button className="text-link" onClick={() => setActivePage('home')}>Explorar catálogo <Icon name="chevron" size={14}/></button>}</div>}
           </section>
@@ -839,7 +956,29 @@ function App() {
       {notice && <div className="toast"><span className="toast-check"><Icon name="check" size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
-        {modal.type === 'details' && selectedTitle && <div className="detail-modal modal-card"><div className="detail-backdrop" style={{ backgroundImage: `linear-gradient(0deg,#101117 0%,rgba(16,17,23,.93) 13%,rgba(16,17,23,0) 100%),linear-gradient(90deg,rgba(16,17,23,.45),transparent),url(${selectedTitle.backdrop})` }}></div><button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button><div className="detail-content"><span className="eyebrow"><span className="pulse-dot"></span>{selectedTitle.type.toUpperCase()} · {selectedTitle.year}</span><h2>{selectedTitle.title}</h2><div className="detail-meta"><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i><span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span><span className="quality-tag">4K UHD</span></div><p>{selectedTitle.description}</p><div className="detail-actions"><button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button><button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button></div><div className="detail-divider"></div><div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{selectedTitle.genre}</strong></span><span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span></div><RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/><ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.original || selectedTitle.title, selectedTitle.type === 'Série' ? 'series' : 'movies', selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/></div></div>}
+        {modal.type === 'details' && selectedTitle && <div className="detail-modal modal-card">
+          <div className="detail-backdrop" style={{ backgroundImage: `linear-gradient(0deg,#101117 0%,rgba(16,17,23,.93) 13%,rgba(16,17,23,0) 100%),linear-gradient(90deg,rgba(16,17,23,.45),transparent),url(${selectedTitle.backdrop})` }}></div>
+          <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
+          <div className="detail-content">
+            <span className="eyebrow"><span className="pulse-dot"></span>{selectedTitle.type.toUpperCase()} · {selectedTitle.year}</span>
+            <h2>{selectedTitle.title}</h2>
+            <div className="detail-meta"><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i><span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span><span className="quality-tag">4K UHD</span></div>
+            <p>{selectedTitle.description}</p>
+            <div className="detail-actions"><button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button><button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button></div>
+            <div className="detail-divider"></div>
+            <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span><span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span></div>
+            <section className="trailer-panel">
+              <div className="trailer-heading"><div><span className="eyebrow">MAIS INFORMAÇÕES</span><strong>Trailer</strong></div>{trailer.status === 'ready' && <button className="button button-quiet button-sm" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={13}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
+              {trailer.status === 'loading' && <p className="trailer-message">A procurar o trailer…</p>}
+              {trailer.status === 'ready' && <><p className="trailer-message">{trailer.name}</p>{trailerPlaying && <div className="trailer-frame"><iframe title={`Trailer: ${selectedTitle.title}`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailer.key)}?autoplay=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}</>}
+              {trailer.status === 'empty' && <p className="trailer-message">Não encontrámos um trailer oficial no TMDB.</p>}
+              {trailer.status === 'unavailable' && <p className="trailer-message">Liga o catálogo TMDB para carregar trailers deste título.</p>}
+              {trailer.status === 'error' && <p className="trailer-message">Não foi possível carregar o trailer neste momento.</p>}
+            </section>
+            <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.original || selectedTitle.title, selectedTitle.type === 'Série' ? 'series' : 'movies', selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
+            <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
+          </div>
+        </div>}
 
         {modal.type === 'integrations' && <div className="integration-modal modal-card">
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
@@ -885,7 +1024,27 @@ function App() {
 
         {modal.type === 'downloads' && <div className="modal-card small-confirm"><div className="modal-emblem magnet-emblem"><Icon name="cloud" size={24}/></div><span className="eyebrow">REAL-DEBRID</span><h2>Magnet enviado</h2><p>O conteúdo foi enviado para a tua conta. A transferência pode demorar alguns instantes a ficar pronta.</p><div className="small-confirm-actions"><button className="button button-quiet" onClick={() => setModal(null)}>Fechar</button><button className="button button-primary" onClick={() => { setModal(null); setActivePage('downloads'); loadRdAccount(); }}>Ver biblioteca <Icon name="chevron" size={14}/></button></div></div>}
 
-        {modal.type === 'player' && <div className="player-modal modal-card"><button className="modal-close player-close" aria-label="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); }}><Icon name="close"/></button><div className="player-frame">{playing?.url && <video controls autoPlay playsInline src={playing.url} onError={() => notify('Este formato não é suportado pelo leitor da app.')}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}{!playing?.url && <div className="player-empty"><Icon name="play" size={28}/><span>A preparar reprodução…</span></div>}</div><div className="player-caption"><div><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong></div><span className="quality-tag">REAL-DEBRID</span></div><section className="subtitle-panel"><div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>{subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}{subtitleStatus === 'downloading' && <p className="subtitle-message"><span className="spinner"></span>A descarregar a legenda…</p>}{subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}{subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}{subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda carregada. Ativa-a no menu de legendas do leitor.</p>}{subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></span></button>)}</div>}</section></div>}
+        {modal.type === 'player' && <div className="player-modal modal-card">
+          <button className="modal-close player-close" aria-label="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close"/></button>
+          <div className="player-frame">
+            {playing?.url && <video ref={playerVideoRef} controls autoPlay src={playing.url} onError={() => notify('O leitor integrado não consegue reproduzir este formato. Experimenta abrir com VLC.')}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+          </div>
+          <div className="player-caption"><div><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong>{/\b(AC3|EAC3|DDP|DTS|TRUEHD|ATMOS)\b/i.test(playing?.fileName || '') && <small className="audio-hint">Este ficheiro indica áudio AC3, EAC3 ou DTS. Se o som ficar indisponível, usa o VLC.</small>}</div><div className="player-tools"><span className="quality-tag">REAL-DEBRID</span>{playing?.url && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.url); } catch (error) { notify(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div></div>
+          <section className="subtitle-panel">
+            <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
+            {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={() => { Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { track.mode = 'disabled'; }); setActiveEmbeddedTrack(null); setSubtitleLabel(''); setSubtitleStatus('found'); }}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
+            {embeddedSubtitleTracks.length === 0 && /\b(subs?|subtitles?|legendas?)\b/i.test(playing?.fileName || '') && <p className="subtitle-message">O nome do ficheiro indica legendas embutidas, mas o leitor não expôs essas faixas. Experimenta “Abrir com VLC” para as selecionar.</p>}
+            {subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}
+            {subtitleStatus === 'downloading' && <p className="subtitle-message"><span className="spinner"></span>A descarregar a legenda…</p>}
+            {subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}
+            {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
+            {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda carregada. Ativa-a no menu de legendas do leitor.</p>}
+            {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
+            {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
+            {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></span></button>)}</div>}
+          </section>
+        </div>}
       </div>}
     </div>
   );
@@ -959,10 +1118,11 @@ function TorrentRow({ torrent, onPlay, onSelect, onDelete }) {
   const status = torrent.status === 'downloaded' ? 'Pronto a ver' : torrent.status === 'waiting_files_selection' ? 'Escolher ficheiros' : torrent.status === 'magnet_conversion' ? 'A preparar' : torrent.status === 'downloading' ? 'A transferir' : torrent.status === 'queued' ? 'Na fila' : torrent.status === 'dead' || torrent.status === 'error' ? 'Indisponível' : 'A processar';
   const isReady = torrent.status === 'downloaded';
   const needsSelection = torrent.status === 'waiting_files_selection';
+  const isDownloading = ['magnet_conversion', 'downloading', 'queued'].includes(torrent.status);
   const progress = isReady ? 100 : Number(torrent.progress || 0);
   const title = torrent.filename || torrent.original_filename || 'Magnet sem nome';
   const size = Number(torrent.bytes) ? `${(Number(torrent.bytes) / (1024 ** 3)).toFixed(1)} GB` : '-';
-  return <div className="torrent-row"><div className={`torrent-cover ${isReady ? 'is-ready' : ''}`}><Icon name={isReady ? 'play' : 'film'} size={18}/></div><div className="torrent-main"><strong title={title}>{title}</strong><span>{size}<i>·</i> Adicionado {formatDate(torrent.added)}</span></div><div className="torrent-progress"><div className="torrent-progress-label"><span className={isReady ? 'ready-status' : ''}><i></i>{status}</span><small>{progress}%</small></div><div className="progress-track"><span style={{ width: `${progress}%` }}></span></div></div><div className="torrent-actions">{isReady ? <button className="button button-primary button-sm" onClick={onPlay}><Icon name="play" size={14}/>Reproduzir</button> : needsSelection ? <button className="button button-quiet button-sm" onClick={onSelect}>Selecionar ficheiros</button> : <button className="button button-quiet button-sm" onClick={onSelect}><Icon name="refresh" size={14}/>Ver estado</button>}<button className="torrent-delete" aria-label={`Remover ${title}`} onClick={onDelete}><Icon name="trash" size={15}/></button></div></div>;
+  return <div className="torrent-row"><div className={`torrent-cover ${isReady ? 'is-ready' : ''}`}><Icon name={isReady || isDownloading ? 'play' : 'film'} size={18}/></div><div className="torrent-main"><strong title={title}>{title}</strong><span>{size}<i>·</i> Adicionado {formatDate(torrent.added)}</span></div><div className="torrent-progress"><div className="torrent-progress-label"><span className={isReady ? 'ready-status' : ''}><i></i>{status}</span><small>{progress}%</small></div><div className="progress-track"><span style={{ width: `${progress}%` }}></span></div></div><div className="torrent-actions">{isReady ? <button className="button button-primary button-sm" onClick={onPlay}><Icon name="play" size={14}/>Reproduzir</button> : needsSelection ? <button className="button button-quiet button-sm" onClick={onSelect}>Selecionar ficheiros</button> : isDownloading ? <button className="button button-quiet button-sm" onClick={onPlay}><Icon name="play" size={14}/>Abrir</button> : <button className="button button-quiet button-sm" onClick={onSelect}><Icon name="refresh" size={14}/>Ver estado</button>}<button className="torrent-delete" aria-label={`Remover ${title}`} onClick={onDelete}><Icon name="trash" size={15}/></button></div></div>;
 }
 
 export default App;

@@ -540,3 +540,38 @@ html, body { background: #070707; }
   .catalog-status { align-items: flex-start; flex-direction: column; }.footer { align-items: flex-start; flex-direction: column; padding: 10px 0; }.footer > span:nth-child(2) { display: block; text-align: left; }
   .subtitle-panel { margin: 7px 1px 2px; padding: 9px; }.subtitle-option { align-items: flex-start; flex-direction: column; }.subtitle-option > span:last-child { width: 100%; justify-content: space-between; }
 }
+
+/* Fullscreen playback, trailer previews, and media categories. */
+.genre-chips { display: flex; gap: 8px; overflow-x: auto; margin: 9px 0 18px; padding: 4px 0 9px; scrollbar-width: thin; }
+.genre-chips button { flex: 0 0 auto; padding: 8px 13px; border: 1px solid rgba(255,255,255,.18); border-radius: 999px; color: #d0d0d0; background: #181818; font: 600 10px/1.2 'Manrope',sans-serif; cursor: pointer; transition: background .15s ease,border-color .15s ease,color .15s ease; }
+.genre-chips button:hover { border-color: rgba(255,255,255,.48); color: #fff; }
+.genre-chips button.active { border-color: #fff; color: #111; background: #fff; }
+.trailer-panel { display: grid; gap: 7px; margin-top: 16px; padding: 13px; border: 1px solid rgba(255,255,255,.09); border-radius: 7px; background: rgba(255,255,255,.025); }
+.trailer-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.trailer-heading > div { display: grid; gap: 5px; }.trailer-heading strong { color: #eee; font-size: 11px; }
+.trailer-message { margin: 0; color: #999; font-size: 9px; line-height: 1.5; }
+.trailer-frame { overflow: hidden; width: 100%; aspect-ratio: 16/9; margin-top: 4px; border-radius: 5px; background: #000; }
+.trailer-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.player-modal { display: flex; flex-direction: column; width: 100vw; height: 100dvh; max-width: none; max-height: none; overflow: hidden; padding: 10px clamp(12px, 3vw, 42px) 12px; border: 0; border-radius: 0; background: #050505; }
+.modal-backdrop:has(.player-modal) { padding: 0; }
+.player-frame { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; border-radius: 4px; }
+.player-frame video { object-fit: contain; }
+.player-caption { flex: 0 0 auto; min-height: 49px; padding: 9px 5px 5px; }
+.player-caption > div { min-width: 0; }.player-caption > div > strong { display: block; overflow: hidden; max-width: 70vw; text-overflow: ellipsis; white-space: nowrap; }
+.player-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }.player-tools .button { min-height: 29px; }
+.audio-hint { display: block; max-width: 72vw; margin-top: 4px; color: #e9b775; font-size: 8px; }
+.player-empty { width: min(560px,90%); padding: 24px; text-align: center; }.player-empty > strong { color: #eee; font-size: 13px; }.player-empty > span:not(.spinner) { max-width: 520px; color: #aaa; font-size: 10px; line-height: 1.5; }
+.player-progress { overflow: hidden; width: min(320px,80%); height: 3px; margin-top: 8px; border-radius: 4px; background: #333; }.player-progress i { display: block; height: 100%; background: #e50914; transition: width .4s ease; }
+.subtitle-panel { flex: 0 1 auto; max-height: 25dvh; overflow-y: auto; margin: 5px 5px 0; scrollbar-width: thin; }
+.embedded-subtitles { display: grid; gap: 7px; margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.07); }
+.embedded-subtitles > span { color: #aaa; font-size: 8px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
+.embedded-subtitles > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.embedded-subtitles button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 3px; color: #ccc; background: rgba(0,0,0,.2); font-size: 9px; cursor: pointer; }
+.embedded-subtitles button.active { border-color: rgba(229,9,20,.6); color: #fff; background: rgba(229,9,20,.12); }
+.embedded-subtitles button small { color: #8f8f8f; font-size: 7px; text-transform: uppercase; }
+@media (max-width: 700px) {
+  .player-modal { padding: 6px 7px 8px; }
+  .player-caption { align-items: flex-start; }.player-tools { align-items: flex-end; flex-direction: column; gap: 5px; }
+  .player-caption > div > strong { max-width: 65vw; }.audio-hint { max-width: 62vw; }
+  .subtitle-panel { max-height: 31dvh; margin-right: 1px; margin-left: 1px; padding: 9px; }
+}

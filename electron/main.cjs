@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, safeStorage, session } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const dns = require('node:dns/promises');
 const net = require('node:net');
@@ -151,10 +152,11 @@ function normalizeTmdbItem(item, baseUrl, sizes) {
   const original = item.original_title || item.original_name || title;
   const date = item.release_date || item.first_air_date || '';
   const type = isMovie ? 'Filme' : 'Série';
+  const genres = [...new Set((item.genre_ids || []).map((id) => TMDB_GENRES[id]).filter(Boolean))];
   return {
     id: `${isMovie ? 'movie' : 'tv'}-${item.id}`, tmdbId: item.id, tmdbType: isMovie ? 'movie' : 'tv',
     title, original, type, year: date ? Number(date.slice(0, 4)) : '',
-    rating: Number(item.vote_average || 0).toFixed(1), genre: (item.genre_ids || []).map((id) => TMDB_GENRES[id]).find(Boolean) || 'Drama',
+    rating: Number(item.vote_average || 0).toFixed(1), genres, genre: genres[0] || 'Drama',
     runtime: isMovie ? 'Filme' : 'Série', poster: tmdbImage(item.poster_path, sizes.poster, baseUrl),
     backdrop: tmdbImage(item.backdrop_path || item.poster_path, sizes.backdrop, baseUrl),
     description: item.overview || 'Descobre mais sobre este título.', accent: '#b30d1b',
@@ -188,6 +190,64 @@ async function fetchTmdbCatalog() {
   const unique = new Map();
   Object.values(rows).flat().forEach((item) => { if (!unique.has(item.id)) unique.set(item.id, item); });
   return { rows, titles: [...unique.values()] };
+}
+
+async function fetchTmdbTrailer({ id, type = 'movie', title = '', year = '' } = {}) {
+  if (!['movie', 'tv'].includes(type)) throw new Error('O tipo de título TMDB é inválido.');
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB nas definições.');
+  let tmdbId = String(id || '');
+  if (!/^\d+$/.test(tmdbId)) {
+    if (!String(title || '').trim()) return null;
+    const params = new URLSearchParams({ query: String(title).trim(), language: 'pt-PT' });
+    if (/^\d{4}$/.test(String(year || ''))) params.set(type === 'movie' ? 'year' : 'first_air_date_year', String(year));
+    const search = await tmdbRequest(`/search/${type}?${params.toString()}`, tmdbApiKey);
+    tmdbId = String(search.results?.[0]?.id || '');
+  }
+  if (!/^\d+$/.test(tmdbId)) return null;
+  const videos = await tmdbRequest(`/${type}/${tmdbId}/videos?language=pt-PT`, tmdbApiKey);
+  let results = videos.results || [];
+  if (!results.some((video) => video.site === 'YouTube' && video.type === 'Trailer')) {
+    const fallback = await tmdbRequest(`/${type}/${tmdbId}/videos?language=en-US`, tmdbApiKey);
+    results = [...results, ...(fallback.results || [])];
+  }
+  const selected = results
+    .filter((video) => video.site === 'YouTube' && video.type === 'Trailer' && video.key)
+    .sort((a, b) => Number(Boolean(b.official)) - Number(Boolean(a.official)))[0];
+  return selected ? { key: selected.key, name: selected.name || 'Trailer' } : null;
+}
+
+async function openExternalPlayer(streamUrl) {
+  let url;
+  try { url = new URL(String(streamUrl || '')); } catch { throw new Error('O endereço do vídeo não é válido.'); }
+  if (url.protocol !== 'https:') throw new Error('O leitor externo só aceita ligações HTTPS.');
+  let executable;
+  if (process.platform === 'win32') {
+    const candidates = [
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'VideoLAN', 'VLC', 'vlc.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'VideoLAN', 'VLC', 'vlc.exe'),
+    ];
+    for (const candidate of candidates) {
+      try { await fs.access(candidate); executable = candidate; break; } catch { /* tenta a pasta seguinte */ }
+    }
+  } else if (process.platform === 'darwin') {
+    const candidate = '/Applications/VLC.app/Contents/MacOS/VLC';
+    try { await fs.access(candidate); executable = candidate; } catch { /* VLC não está na localização padrão */ }
+  } else {
+    executable = 'vlc';
+  }
+  if (!executable) throw new Error('Não encontrei o VLC. Instala-o ou reproduz o vídeo no leitor integrado.');
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(executable, [url.toString()], { detached: true, stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('spawn', () => { child.unref(); resolve(); });
+    });
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error('Não encontrei o VLC. Instala-o ou reproduz o vídeo no leitor integrado.');
+    throw error;
+  }
+  return true;
 }
 
 function openSubtitlesHeaders(apiKey, token) {
@@ -494,6 +554,13 @@ function registerIpc() {
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
+  ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
+  ipcMain.handle('player:external', resultHandler(openExternalPlayer));
+  ipcMain.handle('window:fullscreen', (_event, enabled) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    mainWindow.setFullScreen(Boolean(enabled));
+    return mainWindow.isFullScreen();
+  });
   ipcMain.handle('tmdb:test', resultHandler(testTmdb));
   ipcMain.handle('opensubtitles:test', resultHandler(testOpenSubtitles));
   ipcMain.handle('opensubtitles:search', resultHandler(searchOpenSubtitles));
