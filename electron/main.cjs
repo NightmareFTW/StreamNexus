@@ -166,7 +166,12 @@ async function fetchTmdbCatalog() {
   if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para atualizar o catálogo.');
   const config = await tmdbRequest('/configuration', tmdbApiKey);
   const baseUrl = config.images?.secure_base_url || 'https://image.tmdb.org/t/p/';
-  const sizes = { poster: 'w500', backdrop: 'w1280' };
+  const posterSizes = config.images?.poster_sizes || [];
+  const backdropSizes = config.images?.backdrop_sizes || [];
+  const sizes = {
+    poster: posterSizes.includes('w500') ? 'w500' : posterSizes.find((size) => /^w\d+$/.test(size)) || 'original',
+    backdrop: backdropSizes.includes('w1280') ? 'w1280' : backdropSizes.find((size) => /^w\d+$/.test(size)) || 'original',
+  };
   const language = 'pt-PT';
   const region = 'PT';
   const paths = {
@@ -193,7 +198,8 @@ async function openSubtitlesLogin(settings) {
   if (!settings.openSubtitlesApiKey || !settings.openSubtitlesUsername || !settings.openSubtitlesPassword) {
     throw new Error('Preenche a API key, o utilizador e a palavra-passe do OpenSubtitles.');
   }
-  if (openSubtitlesSession?.expiresAt > Date.now()) return openSubtitlesSession.token;
+  const fingerprint = `${settings.openSubtitlesUsername}:${settings.openSubtitlesApiKey}`;
+  if (openSubtitlesSession?.fingerprint === fingerprint && openSubtitlesSession.expiresAt > Date.now()) return openSubtitlesSession.token;
   if (openSubtitlesLoginPromise) return openSubtitlesLoginPromise;
   openSubtitlesLoginPromise = (async () => {
     const response = await fetch(`${OPENSUBTITLES_API}/login`, {
@@ -202,7 +208,7 @@ async function openSubtitlesLogin(settings) {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || !data?.token) throw new Error(data?.message || `OpenSubtitles respondeu com erro ${response.status}.`);
-    openSubtitlesSession = { token: data.token, expiresAt: Date.now() + 20 * 60 * 60 * 1000 };
+    openSubtitlesSession = { token: data.token, fingerprint, expiresAt: Date.now() + 15 * 60 * 60 * 1000 };
     return data.token;
   })();
   try { return await openSubtitlesLoginPromise; } finally { openSubtitlesLoginPromise = null; }
@@ -224,10 +230,17 @@ async function testOpenSubtitles(value = {}) {
 async function searchOpenSubtitles(value = {}) {
   const settings = await readIntegrations();
   if (!settings.openSubtitlesApiKey) throw new Error('Adiciona a API key do OpenSubtitles em Integrações.');
-  const params = new URLSearchParams({ languages: 'pt-PT,pt-BR', order_by: 'download_count', order_direction: 'desc' });
+  const params = new URLSearchParams({ languages: 'pt-BR,pt-PT', order_by: 'download_count', order_direction: 'desc' });
   if (value.tmdbId) {
-    if (value.tmdbType === 'tv') params.set('parent_tmdb_id', String(value.tmdbId));
-    else params.set('tmdb_id', String(value.tmdbId));
+    if (value.tmdbType === 'tv') {
+      params.set('parent_tmdb_id', String(value.tmdbId));
+      params.set('type', 'episode');
+      const episode = String(value.query || '').match(/[Ss](\d{1,2})[ ._-]?[Ee](\d{1,2})/);
+      if (episode) { params.set('season_number', String(Number(episode[1]))); params.set('episode_number', String(Number(episode[2]))); }
+    } else {
+      params.set('tmdb_id', String(value.tmdbId));
+      params.set('type', 'movie');
+    }
   }
   if (value.query) params.set('query', String(value.query).slice(0, 160));
   const response = await fetch(`${OPENSUBTITLES_API}/subtitles?${params}`, { headers: openSubtitlesHeaders(settings.openSubtitlesApiKey) });
@@ -253,7 +266,7 @@ async function downloadOpenSubtitle(value = {}) {
   const data = await response.json().catch(() => null);
   if (!response.ok || !data?.link) throw new Error(data?.message || `Não foi possível obter a legenda (HTTP ${response.status}).`);
   const downloadUrl = new URL(data.link);
-  if (downloadUrl.protocol !== 'https:' || !downloadUrl.hostname.endsWith('opensubtitles.com')) throw new Error('O OpenSubtitles devolveu um endereço de legenda inválido.');
+  if (downloadUrl.protocol !== 'https:' || (downloadUrl.hostname !== 'opensubtitles.com' && !downloadUrl.hostname.endsWith('.opensubtitles.com'))) throw new Error('O OpenSubtitles devolveu um endereço de legenda inválido.');
   const subtitleResponse = await fetch(downloadUrl);
   if (!subtitleResponse.ok) throw new Error(`A transferência da legenda falhou (HTTP ${subtitleResponse.status}).`);
   return { text: await subtitleResponse.text(), fileName: value.fileName || 'subtitle.srt' };

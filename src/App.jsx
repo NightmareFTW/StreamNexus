@@ -178,6 +178,7 @@ function App() {
   const [catalogTitles, setCatalogTitles] = useState(titles);
   const [catalogRows, setCatalogRows] = useState(null);
   const [catalogStatus, setCatalogStatus] = useState('sample');
+  const [catalogUpdated, setCatalogUpdated] = useState('');
   const [heroIndex, setHeroIndex] = useState(0);
   const [subtitleResults, setSubtitleResults] = useState([]);
   const [subtitleStatus, setSubtitleStatus] = useState('idle');
@@ -260,6 +261,7 @@ function App() {
       setCatalogTitles(data.titles?.length ? data.titles : titles);
       setCatalogRows(data.rows || null);
       setHeroIndex(0);
+      setCatalogUpdated(new Intl.DateTimeFormat('pt-PT', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date()));
       setCatalogStatus('ready');
     } catch (error) {
       setCatalogStatus('error');
@@ -553,7 +555,7 @@ function App() {
     }
   };
 
-  const saveProwlarrSettings = async (event) => {
+  const saveIntegrationSettings = async (event) => {
     event.preventDefault();
     setIntegrationTest('A guardar configuração…');
     try {
@@ -696,7 +698,7 @@ function App() {
           <div className="breadcrumbs"><span>STREAMNEXUS</span><Icon name="chevron" size={13}/><strong>{activePage === 'downloads' ? 'REAL-DEBRID' : activePage === 'indexers' ? 'PESQUISA DE LANÇAMENTOS' : pageTitle.toUpperCase()}</strong></div>
           <div className="topbar-right">
             <label className={`search-box ${query ? 'has-value' : ''}`}><Icon name="search" size={18}/><input aria-label="Pesquisar títulos" placeholder="Títulos, géneros…" value={query} onChange={(event) => { setQuery(event.target.value); if (activePage === 'downloads') setActivePage('home'); }}/><kbd>⌘ K</kbd></label>
-            {activePage === 'home' && <button className="icon-button catalog-refresh" aria-label="Atualizar catálogo" title="Atualizar tendências e estreias" onClick={refreshCatalog} disabled={catalogStatus === 'loading'}><Icon name="refresh" size={17}/></button>}
+            {activePage === 'home' && <button className="icon-button catalog-refresh" aria-label="Atualizar catálogo" title="Atualizar tendências e estreias" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}><Icon name="refresh" size={17}/></button>}
             <button className="icon-button notification-button" aria-label="Notificações" onClick={() => notify(session?.access_token ? 'A tua conta está sincronizada.' : 'Liga o Real-Debrid para sincronizar a biblioteca.')}><Icon name="bell"/><i></i></button>
             <button className="top-avatar" onClick={() => setModal({ type: 'connect' })}>{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</button>
           </div>
@@ -732,7 +734,7 @@ function App() {
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>
 
-            {catalogStatus !== 'ready' && <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar o catálogo…' : catalogStatus === 'error' ? 'Não foi possível atualizar agora. A mostrar a seleção incluída na app.' : 'Catálogo de demonstração. Liga a API do TMDB nas Integrações para obter tendências e estreias atualizadas.'}</span><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>{integrationSettings.tmdbApiKey ? 'Tentar novamente' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>}
+            <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
             {homeShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls"><button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button><div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
@@ -760,7 +762,7 @@ function App() {
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <div className="modal-emblem magnet-emblem"><Icon name="settings" size={23}/></div><span className="eyebrow">CATÁLOGO, PESQUISA E LEGENDAS</span><h2>Integrações</h2>
           <p className="connect-lead">Liga o Prowlarr para pesquisar fontes, o TMDB para atualizar tendências e estreias, e o OpenSubtitles para procurar legendas. A preferência de legendas é português de Portugal.</p>
-          <form onSubmit={saveProwlarrSettings} className="integration-form">
+          <form onSubmit={saveIntegrationSettings} className="integration-form">
             <div className="integration-group-title">Prowlarr</div>
             <label className="input-label" htmlFor="prowlarr-url">Endereço do Prowlarr</label><input id="prowlarr-url" className="text-input" type="url" placeholder="http://localhost:9696" value={integrationForm.prowlarrUrl} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="prowlarr-key">API key do Prowlarr</label><input id="prowlarr-key" className="text-input" type="password" autoComplete="off" placeholder="Settings > General > Security" value={integrationForm.prowlarrApiKey} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrApiKey: event.target.value }))}/>
@@ -784,6 +786,7 @@ function App() {
           <div className="adult-setting"><span><strong>Pesquisa de conteúdo adulto</strong><small>Ativa a categoria Adulto (Whisparr) no menu e nas pesquisas.</small></span><input type="checkbox" checked={adultEnabled} onChange={(event) => toggleAdultSearch(event.target.checked)} aria-label="Ativar pesquisa de conteúdo adulto"/></div>
           <div className="readarr-note"><strong>Readarr</strong><span>O projeto foi descontinuado oficialmente em 2025. A pesquisa de livros continua disponível pela categoria Books no Prowlarr.</span></div>
           <p className="privacy-note"><Icon name="alert" size={14}/>{window.streamnexus?.isDesktop ? 'Todas as chaves e credenciais são guardadas cifradas com a proteção de credenciais do Windows.' : 'Nesta pré-visualização, as chaves ficam apenas nesta sessão do separador.'}</p>
+          <section className="credits-panel"><strong>Créditos</strong><div><span className="tmdb-wordmark">TMDB</span><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></div></section>
         </div>}
 
         {modal.type === 'connect' && <div className="connect-modal modal-card"><button className="modal-close" aria-label="Fechar" onClick={() => { setModal(null); setDeviceAuth(null); setDeviceStatus(''); }}><Icon name="close"/></button><div className="modal-emblem"><Icon name="cloud" size={26}/><span className="emblem-orbit"></span></div><span className="eyebrow">INTEGRAÇÃO OFICIAL</span><h2>{session?.access_token ? 'A tua conta está ligada' : 'A tua nuvem, aqui'}</h2><p className="connect-lead">Liga o Real-Debrid para sincronizar os teus torrents e reproduzir os conteúdos da tua conta.</p>
@@ -875,7 +878,7 @@ function TorrentRow({ torrent, onPlay, onSelect, onDelete }) {
   const needsSelection = torrent.status === 'waiting_files_selection';
   const progress = isReady ? 100 : Number(torrent.progress || 0);
   const title = torrent.filename || torrent.original_filename || 'Magnet sem nome';
-  const size = Number(torrent.bytes) ? `${(Number(torrent.bytes) / (1024 ** 3)).toFixed(1)} GB` : '—';
+  const size = Number(torrent.bytes) ? `${(Number(torrent.bytes) / (1024 ** 3)).toFixed(1)} GB` : '-';
   return <div className="torrent-row"><div className={`torrent-cover ${isReady ? 'is-ready' : ''}`}><Icon name={isReady ? 'play' : 'film'} size={18}/></div><div className="torrent-main"><strong title={title}>{title}</strong><span>{size}<i>·</i> Adicionado {formatDate(torrent.added)}</span></div><div className="torrent-progress"><div className="torrent-progress-label"><span className={isReady ? 'ready-status' : ''}><i></i>{status}</span><small>{progress}%</small></div><div className="progress-track"><span style={{ width: `${progress}%` }}></span></div></div><div className="torrent-actions">{isReady ? <button className="button button-primary button-sm" onClick={onPlay}><Icon name="play" size={14}/>Reproduzir</button> : needsSelection ? <button className="button button-quiet button-sm" onClick={onSelect}>Selecionar ficheiros</button> : <button className="button button-quiet button-sm" onClick={onSelect}><Icon name="refresh" size={14}/>Ver estado</button>}<button className="torrent-delete" aria-label={`Remover ${title}`} onClick={onDelete}><Icon name="trash" size={15}/></button></div></div>;
 }
 
