@@ -663,3 +663,49 @@ html, body { background: #070707; }
 .hero-kicker { margin-bottom: 18px; }
 .hero-copy { -webkit-line-clamp: 2; }
 .hero.hero-art { background-size: 100% 100%, 100% 100%, auto 100%; }
+
+
+/* Estante pessoal na aba Livros */
+.reading-dashboard { margin-bottom: 8px; padding-top: 8px; }
+.rd-head h1 { margin: 6px 0 18px; font: 800 clamp(26px, 3vw, 36px)/1.1 'Manrope', sans-serif; letter-spacing: -1px; color: #fff; }
+.rd-widgets { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.rd-card { display: flex; flex-direction: column; gap: 9px; min-height: 190px; padding: 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02)), #141414; }
+.rd-card.rd-wide { grid-column: span 2; }
+.rd-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; color: #f1f1f1; font: 700 14px 'Manrope', sans-serif; }
+.rd-card h3 svg { color: #e50914; }
+.rd-muted { color: #8d8d95; font-size: 11px; }
+.rd-empty-text { margin: auto 0; color: #9a9aa3; font-size: 12px; line-height: 1.5; text-align: center; }
+.rd-streak { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.rd-streak strong, .rd-goal strong { color: #fff; font: 800 34px/1 'Manrope', sans-serif; }
+.rd-streak span, .rd-goal span { color: #a9a9b0; font-size: 12px; }
+.rd-goal { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.rd-dots { display: flex; gap: 7px; }
+.rd-dots i { width: 11px; height: 11px; border-radius: 50%; background: rgba(255,255,255,.14); }
+.rd-dots i.is-active { background: #e50914; box-shadow: 0 0 10px rgba(229,9,20,.55); }
+.rd-progress { display: block; height: 6px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.12); }
+.rd-progress i { display: block; height: 100%; border-radius: inherit; background: #e50914; transition: width .25s ease; }
+.rd-reading-list { display: grid; gap: 8px; }
+.rd-reading-item { display: flex; align-items: center; gap: 11px; padding: 7px; border: 0; border-radius: 6px; background: rgba(255,255,255,.04); color: inherit; text-align: left; cursor: pointer; transition: background .15s ease; }
+.rd-reading-item:hover { background: rgba(255,255,255,.085); }
+.rd-reading-item img { width: 34px; height: 50px; border-radius: 3px; object-fit: cover; background: #222; }
+.rd-reading-item > span { display: grid; flex: 1; gap: 4px; min-width: 0; }
+.rd-reading-item strong { overflow: hidden; color: #f3f3f3; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.rd-reading-item small { overflow: hidden; color: #8d8d95; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.rd-reading-item em { color: #bdbdc4; font: 700 11px 'Manrope', sans-serif; font-style: normal; }
+.rd-goal-form { display: flex; flex: 1; flex-direction: column; justify-content: center; gap: 10px; }
+.rd-goal-form > div { display: flex; gap: 8px; }
+.rd-goal-form .text-input { width: 80px; }
+.rd-dna { display: grid; gap: 10px; margin-top: 4px; }
+.rd-dna > div { display: grid; grid-template-columns: 96px 1fr 18px; align-items: center; gap: 9px; color: #cfcfd5; font-size: 11px; }
+.rd-dna > div > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-dna em { color: #8d8d95; font-style: normal; }
+.rd-challenge-title { margin-top: 6px; color: #fff; font: 700 15px 'Manrope', sans-serif; }
+.rd-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; margin-left: 6px; padding: 0 7px; border-radius: 99px; background: rgba(255,255,255,.1); color: #d6d6dc; font: 700 11px 'Manrope', sans-serif; vertical-align: middle; }
+.rd-empty { display: flex; align-items: center; gap: 12px; padding: 22px; border: 1px dashed rgba(255,255,255,.16); border-radius: 8px; color: #9a9aa3; font-size: 13px; }
+.rd-discover { margin: 34px 0 0; }
+.reading-controls { display: grid; gap: 10px; margin: 18px 0 4px; padding: 14px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; background: rgba(255,255,255,.04); }
+.reading-status { display: flex; flex-wrap: wrap; gap: 8px; }
+.reading-status .button.is-active { border-color: #e50914; background: rgba(229,9,20,.22); color: #fff; }
+.reading-slider { display: flex; align-items: center; gap: 12px; color: #c4c4cb; font-size: 12px; }
+.reading-slider input { flex: 1; accent-color: #e50914; }
+@media (max-width: 900px) { .rd-card.rd-wide { grid-column: auto; } }
