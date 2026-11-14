@@ -278,12 +278,24 @@ function validateRealDebridStreamUrl(value) {
   return url.toString();
 }
 
+// Lê o codec do vídeo com `ffmpeg -i` (o ffmpeg-static não inclui o ffprobe).
+function probeVideoCodec(executable, sourceUrl) {
+  return new Promise((resolve) => {
+    let output = '';
+    const child = spawn(executable, ['-hide_banner', '-i', sourceUrl], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const timer = setTimeout(() => child.kill(), 20000);
+    child.stderr.on('data', (chunk) => { output = `${output}${chunk}`.slice(0, 20000); });
+    child.once('error', () => { clearTimeout(timer); resolve(''); });
+    child.once('close', () => { clearTimeout(timer); resolve(output.match(/Video:\s*([a-z0-9_]+)/i)?.[1]?.toLowerCase() || ''); });
+  });
+}
+
 async function prepareAudioStream(value) {
   const sourceUrl = validateRealDebridStreamUrl(value?.url);
   const executable = await findFfmpegExecutable();
   const id = randomUUID();
   const token = randomUUID();
-  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false };
+  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, transcodeVideo: Boolean(value?.transcodeVideo), videoCodec: '', error: '' };
   stream.server = http.createServer((request, response) => {
     if (request.url !== `/${token}`) {
       response.writeHead(404).end();
@@ -294,10 +306,21 @@ async function prepareAudioStream(value) {
       return;
     }
     stream.started = true;
+    const codecReady = stream.transcodeVideo ? Promise.resolve('') : probeVideoCodec(executable, sourceUrl);
+    codecReady.then((codec) => { stream.videoCodec = codec; }).catch(() => {}).then(() => {
+      if (!response.destroyed) startFfmpeg(request, response);
+    });
+  });
+
+  function startFfmpeg(_request, response) {
+    // HEVC em MP4 só é reconhecido pelo Chromium com a tag hvc1 (o FFmpeg usa hev1 por defeito).
+    const videoArgs = stream.transcodeVideo
+      ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-vf', "scale=-2:'min(1080,ih)'"]
+      : ['-c:v', 'copy', ...(stream.videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
     const args = [
       '-hide_banner', '-loglevel', 'error', '-i', sourceUrl,
       '-map', '0:v:0?', '-map', '0:a:0?',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+      ...videoArgs, '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
       '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1',
     ];
     const child = spawn(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -325,7 +348,7 @@ async function prepareAudioStream(value) {
     });
     child.stdout.once('end', () => { if (responseStarted && !response.destroyed) response.end(); });
     child.once('close', (code) => {
-      if (code !== 0 && safeErrorOutput()) console.error('[StreamNexus audio]', safeErrorOutput());
+      if (code !== 0 && safeErrorOutput()) { stream.error = safeErrorOutput().slice(-600); console.error('[StreamNexus audio]', stream.error); }
       if (!response.destroyed && !response.writableEnded) {
         if (!responseStarted) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).end(safeErrorOutput() || 'FFmpeg could not read this stream.');
         else response.end();
@@ -335,7 +358,7 @@ async function prepareAudioStream(value) {
     response.once('close', () => {
       if (stream.child && !stream.child.killed) stream.child.kill();
     });
-  });
+  }
   await new Promise((resolve, reject) => {
     stream.server.once('error', reject);
     stream.server.listen(0, '127.0.0.1', resolve);
@@ -352,6 +375,11 @@ async function stopAudioStream(id) {
   if (stream.child && !stream.child.killed) stream.child.kill();
   if (stream.server?.listening) await new Promise((resolve) => stream.server.close(resolve));
   return true;
+}
+
+function getAudioStreamInfo(id) {
+  const stream = audioStreams.get(String(id || ''));
+  return stream ? { videoCodec: stream.videoCodec, transcodeVideo: stream.transcodeVideo, error: stream.error } : null;
 }
 
 async function stopAllAudioStreams() {
@@ -666,6 +694,7 @@ function registerIpc() {
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
+  ipcMain.handle('player:stream-info', (_event, id) => getAudioStreamInfo(id));
   ipcMain.handle('player:stop-audio', (_event, id) => stopAudioStream(id));
   ipcMain.handle('window:fullscreen', (_event, enabled) => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;

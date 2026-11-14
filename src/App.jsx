@@ -450,6 +450,13 @@ function App() {
   }, [isPlayerOpen]);
 
   useEffect(() => {
+    if (!isPlayerOpen) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [isPlayerOpen]);
+
+  useEffect(() => {
     if (!isPlayerOpen) {
       window.clearTimeout(playerControlsTimerRef.current);
       setPlayerControlsVisible(true);
@@ -504,6 +511,24 @@ function App() {
       video.removeEventListener('volumechange', updateVolume);
     };
   }, [isPlayerOpen, playing?.url]);
+
+  const handleVideoError = async () => {
+    let reason = 'O leitor integrado não conseguiu abrir este vídeo.';
+    try {
+      const info = playing?.id ? await window.streamnexus?.getStreamInfo(playing.id) : null;
+      if (info?.error) reason = `${reason} ${info.error.split('\n').pop()}`;
+      else if (info?.videoCodec === 'hevc' && !info.transcodeVideo) reason = 'O leitor integrado não conseguiu reproduzir este vídeo HEVC (H.265).';
+    } catch { /* mantém a mensagem genérica */ }
+    setPlayerPlaybackError(reason);
+  };
+
+  const retryWithVideoConversion = async () => {
+    if (!playing?.sourceUrl) return;
+    setPlayerPlaybackError('');
+    setPlaying((current) => current ? { ...current, url: '', id: '', converting: true } : current);
+    const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true });
+    setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true } : current);
+  };
 
   const togglePlayerPlayback = () => {
     const video = playerVideoRef.current;
@@ -793,13 +818,13 @@ function App() {
     }
   };
 
-  const preparePlayerAudio = async (sourceUrl) => {
+  const preparePlayerAudio = async (sourceUrl, options = {}) => {
     if (!window.streamnexus?.isDesktop || !sourceUrl) return { url: sourceUrl, sourceUrl };
     const previousId = audioStreamIdRef.current;
     audioStreamIdRef.current = '';
     if (previousId) await window.streamnexus.stopAudioStream(previousId).catch(() => {});
     try {
-      const stream = await window.streamnexus.prepareAudioStream(sourceUrl);
+      const stream = await window.streamnexus.prepareAudioStream(sourceUrl, options);
       audioStreamIdRef.current = stream.id;
       return { ...stream, sourceUrl };
     } catch (error) {
@@ -1258,9 +1283,9 @@ function App() {
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.url} onClick={togglePlayerPlayback} onError={() => setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.')}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
-            {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>Confirma a ligação ou tenta abrir o ficheiro original.</span>{playing?.sourceUrl && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
-            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.url} onClick={togglePlayerPlayback} onError={handleVideoError}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>Confirma a ligação ou tenta abrir o ficheiro original.</span>{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
+            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
