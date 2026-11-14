@@ -49,8 +49,8 @@ export function LiveTvPage({ mode, onMode, countries, country, onCountry, state,
 
     {sections.length > 0
       ? sections.map(({ label, list }) => <section className="content-section" key={label}>
-          <div className="section-heading"><div><span className="eyebrow">{list.length} {list.length === 1 ? 'CANAL' : 'CANAIS'}</span><h2>{label}</h2></div>{list.length > 12 && <button className="view-all" onClick={() => setCategory(label)}>Ver todos <Icon name="chevron" size={14}/></button>}</div>
-          <div className="channel-grid">{list.slice(0, 12).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>
+          <div className="section-heading"><div><span className="eyebrow">{list.length} {list.length === 1 ? 'CANAL' : 'CANAIS'}</span><h2>{label}</h2></div>{list.length > 60 && <button className="view-all" onClick={() => setCategory(label)}>Ver todos <Icon name="chevron" size={14}/></button>}</div>
+          <div className="channel-grid">{list.slice(0, 60).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>
         </section>)
       : visible.length > 0 && <div className="channel-grid">{visible.map((item, index) => <PosterCard key={item.id} item={item} index={index % 12} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>}
   </section>;

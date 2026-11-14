@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const dns = require('node:dns/promises');
 const net = require('node:net');
 const http = require('node:http');
+const { Readable } = require('node:stream');
 
 let staticFfmpegPath = '';
 try { staticFfmpegPath = require('ffmpeg-static') || ''; } catch { /* o binário é opcional na pré-visualização */ }
@@ -458,6 +459,41 @@ function streamScore(stream) {
   return (stream.referrer || stream.user_agent ? 100000 : 0) + (/^https:/i.test(stream.url) ? 0 : 50000) - quality;
 }
 
+function parseM3u(text) {
+  const entries = [];
+  let current = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('#EXTINF')) {
+      const attrs = {};
+      line.replace(/([\w-]+)="([^"]*)"/g, (_match, key, value) => { attrs[key] = value; return ''; });
+      current = { name: line.slice(line.lastIndexOf(',') + 1).trim(), group: attrs['group-title'] || '', tvgId: attrs['tvg-id'] || '', logo: attrs['tvg-logo'] || '', userAgent: '', referrer: '', origin: '' };
+    } else if (current && line.startsWith('#EXTVLCOPT:')) {
+      const [key, ...rest] = line.slice(11).split('=');
+      const value = rest.join('=').replace(/^"|"$/g, '');
+      if (key === 'http-user-agent') current.userAgent = value;
+      else if (key === 'http-referrer' || key === 'http-referer') current.referrer = value;
+      else if (key === 'http-origin') current.origin = value;
+    } else if (current && line && !line.startsWith('#')) {
+      if (/^https?:/i.test(line)) entries.push({ ...current, url: line });
+      current = null;
+    }
+  }
+  return entries;
+}
+
+const normalizeChannelName = (name) => String(name || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '').replace(/hd$/, '');
+
+function guessTvCategory(name) {
+  if (/not[ií]cias|news|cnn|euronews|bfm|sky news|al jazeera|france 24|dw\b|deutsche welle/i.test(name)) return 'Notícias';
+  if (/kids|cartoon|anime|gulli|zig ?zag|infantil|disney|panda/i.test(name)) return 'Infantil';
+  if (/music|m[úu]sica|trace|xite|deejay|vh1|clubbing|\bfm\b/i.test(name)) return 'Música';
+  if (/cine|movie|film/i.test(name)) return 'Filmes';
+  if (/sport|desporto|fifa|madrid|tennis|fuel|red bull|nautical|motor/i.test(name)) return 'Desporto';
+  if (/ma[nñ]á|igreja|church|canção nova|kuriakos/i.test(name)) return 'Religião';
+  return 'Geral';
+}
+
 async function loadLiveTv() {
   if (liveTvCache && Date.now() - liveTvCache.at < LIVE_TTL) return liveTvCache;
   if (!liveTvPromise) {
@@ -504,6 +540,27 @@ async function loadLiveTv() {
         if (!byCountry.has(channel.country)) byCountry.set(channel.country, []);
         byCountry.get(channel.country).push(item);
       }
+      try {
+        const playlist = await (await fetch('https://raw.githubusercontent.com/LITUATUI/M3UPT/main/M3U/M3UPT.m3u', { headers: { 'User-Agent': 'StreamNexus/0.1' } })).text();
+        for (const entry of parseM3u(playlist)) {
+          if (entry.group !== 'TV') continue;
+          const code = String(entry.tvgId.split('.').pop() || '').toUpperCase();
+          if (code.length !== 2 || !countryInfo.has(code)) continue;
+          if (!byCountry.has(code)) byCountry.set(code, []);
+          const list = byCountry.get(code);
+          const key = normalizeChannelName(entry.name);
+          if (!key) continue;
+          liveStreamMeta.set(entry.url, { referrer: entry.referrer, userAgent: entry.userAgent, origin: entry.origin });
+          const stream = { url: entry.url, quality: '' };
+          const existing = list.find((item) => normalizeChannelName(item.title) === key);
+          if (existing) { existing.streams = [stream, ...existing.streams].slice(0, 5); continue; }
+          const label = guessTvCategory(entry.name);
+          list.push({
+            id: `live-m3upt-${code}-${key}`, type: 'Canal', title: entry.name, original: entry.name, creator: countryInfo.get(code).name, year: '', rating: '',
+            genre: label, genres: [label], runtime: 'Ao vivo', poster: entry.logo, backdrop: entry.logo, description: `Canal de televisão · ${countryInfo.get(code).name}`, accent: '#b30d1b', streams: [stream],
+          });
+        }
+      } catch { /* a lista complementar é opcional */ }
       for (const list of byCountry.values()) list.sort((a, b) => a.title.localeCompare(b.title, 'pt-PT'));
       liveTvCache = { at: Date.now(), byCountry, countryInfo };
       return liveTvCache;
@@ -577,15 +634,22 @@ async function fetchEpornerVideos(order, term) {
   return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()))).filter((item) => item.poster && item.embedUrl);
 }
 
-function interleaveAdult(lists, limit = 24) {
-  const seen = new Set();
+const adultKey = (title) => String(title || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const adultStem = (title) => adultKey(title).split(' ').slice(0, 3).join(' ');
+
+function interleaveAdult(lists, used, limit = 24) {
   const out = [];
+  const stems = new Map();
   for (let index = 0; out.length < limit && lists.some((list) => index < list.length); index += 1) {
     for (const list of lists) {
       const item = list[index];
-      const key = item?.title.toLowerCase();
-      if (!item || seen.has(key)) continue;
-      seen.add(key); out.push(item);
+      if (!item) continue;
+      const key = adultKey(item.title);
+      const stem = adultStem(item.title);
+      if (!key || used.has(key) || (stem.length > 8 && (stems.get(stem) || 0) >= 2)) continue;
+      used.add(key);
+      stems.set(stem, (stems.get(stem) || 0) + 1);
+      out.push(item);
       if (out.length >= limit) break;
     }
   }
@@ -598,10 +662,12 @@ async function fetchAdultVideos(value = {}) {
   const cached = adultVideoCache.get(term);
   if (cached && Date.now() - cached.at < DISCOVERY_TTL) return cached.rows;
   const specs = term ? ADULT_ROWS.slice(0, 2) : ADULT_ROWS;
-  const rows = await Promise.all(specs.map(async (spec) => {
+  const fetched = await Promise.all(specs.map(async (spec) => {
     const settled = await Promise.allSettled([fetchRedtubeVideos(spec.rt, term), fetchPornhubVideos(spec.ph, term), fetchEpornerVideos(spec.ep, term)]);
-    return { eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : []))) };
+    return { spec, lists: settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : [])) };
   }));
+  const used = new Set();
+  const rows = fetched.map(({ spec, lists }) => ({ eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(lists, used) }));
   if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível contactar as fontes (RedTube, Pornhub e Eporner). Tenta novamente mais tarde.');
   adultVideoCache.set(term, { at: Date.now(), rows });
   return rows;
@@ -673,16 +739,30 @@ function validateRealDebridStreamUrl(value) {
   return url.toString();
 }
 
-// Lê o codec do vídeo com `ffmpeg -i` (o ffmpeg-static não inclui o ffprobe).
-function probeVideoCodec(executable, sourceUrl, inputArgs = []) {
+// Lê container e codecs com `ffmpeg -i` (o ffmpeg-static não inclui o ffprobe).
+function probeMedia(executable, sourceUrl, inputArgs = []) {
   return new Promise((resolve) => {
     let output = '';
     const child = spawn(executable, ['-hide_banner', ...inputArgs, '-i', sourceUrl], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     const timer = setTimeout(() => child.kill(), 20000);
-    child.stderr.on('data', (chunk) => { output = `${output}${chunk}`.slice(0, 20000); });
-    child.once('error', () => { clearTimeout(timer); resolve(''); });
-    child.once('close', () => { clearTimeout(timer); resolve(output.match(/Video:\s*([a-z0-9_]+)/i)?.[1]?.toLowerCase() || ''); });
+    child.stderr.on('data', (chunk) => { output = `${output}${chunk}`.slice(0, 30000); });
+    const parse = () => {
+      const videoLine = [...output.matchAll(/Video:\s*([a-z0-9_]+)[^\n]*/gi)].find((entry) => !['mjpeg', 'png', 'bmp', 'gif'].includes(entry[1].toLowerCase()));
+      return {
+        container: output.match(/Input #0,\s*(.+?),\s*from\s/i)?.[1]?.toLowerCase() || '',
+        video: videoLine?.[1]?.toLowerCase() || '',
+        tenBit: Boolean(videoLine && /10le|p10|10be/i.test(videoLine[0])),
+        audio: output.match(/Audio:\s*([a-z0-9_]+)/i)?.[1]?.toLowerCase() || '',
+      };
+    };
+    child.once('error', () => { clearTimeout(timer); resolve({ container: '', video: '', tenBit: false, audio: '' }); });
+    child.once('close', () => { clearTimeout(timer); resolve(parse()); });
   });
+}
+
+// O Chromium reproduz estes formatos diretamente (e com seek); o resto passa pelo FFmpeg.
+function canPlayDirectly(info) {
+  return /matroska|webm|mov|mp4/.test(info.container) && ['h264', 'vp9', 'av1', 'vp8'].includes(info.video) && !info.tenBit && (!info.audio || ['aac', 'mp3', 'opus', 'vorbis', 'flac'].includes(info.audio));
 }
 
 async function prepareAudioStream(value) {
@@ -692,12 +772,18 @@ async function prepareAudioStream(value) {
   const inputArgs = [
     ...(liveMeta.userAgent ? ['-user_agent', liveMeta.userAgent] : []),
     ...(liveMeta.referrer ? ['-referer', liveMeta.referrer] : []),
+    ...(liveMeta.origin ? ['-headers', `Origin: ${liveMeta.origin}\r\n`] : []),
     ...(live ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4'] : []),
   ];
   const executable = await findFfmpegExecutable();
+  let probed = null;
+  if (!live && !value?.transcodeVideo && !value?.forcePipe) {
+    probed = await probeMedia(executable, sourceUrl, inputArgs);
+    if (canPlayDirectly(probed)) return { id: '', url: sourceUrl, direct: true, videoCodec: probed.video, audioCodec: probed.audio };
+  }
   const id = randomUUID();
   const token = randomUUID();
-  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, transcodeVideo: Boolean(value?.transcodeVideo), videoCodec: '', error: '' };
+  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, transcodeVideo: Boolean(value?.transcodeVideo) || Boolean(probed && (probed.tenBit || (probed.video && !['h264', 'vp9', 'av1', 'vp8', 'hevc'].includes(probed.video)))), videoCodec: '', error: '' };
   stream.server = http.createServer((request, response) => {
     if (request.url !== `/${token}`) {
       response.writeHead(404).end();
@@ -708,7 +794,7 @@ async function prepareAudioStream(value) {
       return;
     }
     stream.started = true;
-    const codecReady = stream.transcodeVideo ? Promise.resolve('') : probeVideoCodec(executable, sourceUrl, inputArgs);
+    const codecReady = stream.transcodeVideo ? Promise.resolve('') : probed ? Promise.resolve(probed.video) : probeMedia(executable, sourceUrl, inputArgs).then((info) => info.video);
     codecReady.then((codec) => { stream.videoCodec = codec; }).catch(() => {}).then(() => {
       if (!response.destroyed) startFfmpeg(request, response);
     });
@@ -768,6 +854,83 @@ async function prepareAudioStream(value) {
   audioStreams.set(id, stream);
   const { port } = stream.server.address();
   return { id, url: `http://127.0.0.1:${port}/${token}` };
+}
+
+// ---- Reprodução HLS direta: proxy local que acrescenta os cabeçalhos exigidos e o CORS ----
+const LIVE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+function isPrivateHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host.endsWith('.local') || host === '::1' || /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^f[cd][0-9a-f]{2}:/i.test(host);
+}
+
+async function prepareLiveHls(value) {
+  const sourceUrl = validateLiveStreamUrl(value?.url);
+  const meta = liveStreamMeta.get(sourceUrl) || {};
+  const id = randomUUID();
+  const urls = [sourceUrl];
+  // Alguns servidores mudam um parâmetro de sessão em cada pedido; a chave estável evita que o hls.js veja segmentos "diferentes".
+  const stableKey = (value) => {
+    try { const url = new URL(value); ['nimblesessionid', 'sessionid', 'session_id'].forEach((name) => url.searchParams.delete(name)); return url.toString(); } catch { return value; }
+  };
+  const indexByUrl = new Map([[stableKey(sourceUrl), 0]]);
+  const stream = { id, server: null, child: null, sourceUrl, videoCodec: '', transcodeVideo: false, error: '' };
+  let origin = meta.origin || '';
+  if (!origin && meta.referrer) { try { origin = new URL(meta.referrer).origin; } catch { origin = ''; } }
+  const upstreamHeaders = { 'User-Agent': meta.userAgent || LIVE_UA, Accept: '*/*', ...(meta.referrer ? { Referer: meta.referrer } : {}), ...(origin ? { Origin: origin } : {}) };
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Cache-Control': 'no-store' };
+  let port = 0;
+
+  const register = (uri, base) => {
+    let absolute;
+    try { absolute = new URL(uri, base); } catch { return uri; }
+    if (!['http:', 'https:'].includes(absolute.protocol) || isPrivateHost(absolute.hostname)) return uri;
+    const key = stableKey(absolute.toString());
+    let index = indexByUrl.get(key);
+    if (index === undefined) { index = urls.length; urls.push(absolute.toString()); indexByUrl.set(key, index); }
+    else urls[index] = absolute.toString();
+    return `http://127.0.0.1:${port}/p/${index}`;
+  };
+  const rewritePlaylist = (text, base) => text.split(/\r?\n/).map((line) => {
+    if (!line.trim()) return line;
+    if (line.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_match, uri) => `URI="${register(uri, base)}"`);
+    return register(line.trim(), base);
+  }).join('\n');
+
+  stream.server = http.createServer(async (request, response) => {
+    if (request.method === 'OPTIONS') { response.writeHead(204, cors).end(); return; }
+    const match = /^\/p\/(\d+)/.exec(request.url || '');
+    const target = match ? urls[Number(match[1])] : '';
+    if (!target) { response.writeHead(404, cors).end(); return; }
+    const controller = new AbortController();
+    response.once('close', () => controller.abort());
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const upstream = await fetch(target, { headers: upstreamHeaders, signal: controller.signal, redirect: 'follow' });
+      clearTimeout(timer);
+      const type = upstream.headers.get('content-type') || '';
+      if (!upstream.ok) { response.writeHead(upstream.status, cors).end(); return; }
+      if (/mpegurl/i.test(type) || /\.m3u8(\?|$)/i.test(upstream.url)) {
+        const text = await upstream.text();
+        const body = text.trimStart().startsWith('#EXTM3U') ? rewritePlaylist(text, upstream.url) : text;
+        response.writeHead(200, { ...cors, 'Content-Type': 'application/vnd.apple.mpegurl' }).end(body);
+        return;
+      }
+      response.writeHead(200, { ...cors, 'Content-Type': type || 'application/octet-stream' });
+      Readable.fromWeb(upstream.body).on('error', () => response.destroy()).pipe(response);
+    } catch (error) {
+      clearTimeout(timer);
+      if (!response.headersSent) response.writeHead(502, cors).end(String(error.message || 'Falha ao contactar a emissão.'));
+      else response.destroy();
+    }
+  });
+  await new Promise((resolve, reject) => {
+    stream.server.once('error', reject);
+    stream.server.listen(0, '127.0.0.1', resolve);
+  });
+  port = stream.server.address().port;
+  audioStreams.set(id, stream);
+  return { id, url: `http://127.0.0.1:${port}/p/0` };
 }
 
 async function stopAudioStream(id) {
@@ -1101,6 +1264,7 @@ function registerIpc() {
   ipcMain.handle('spotify:test', resultHandler(testSpotify));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
+  ipcMain.handle('player:prepare-hls', resultHandler(prepareLiveHls));
   ipcMain.handle('player:stream-info', (_event, id) => getAudioStreamInfo(id));
   ipcMain.handle('player:stop-audio', (_event, id) => stopAudioStream(id));
   ipcMain.handle('window:fullscreen', (_event, enabled) => {

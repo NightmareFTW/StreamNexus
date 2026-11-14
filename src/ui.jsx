@@ -43,10 +43,12 @@ export function Icon({ name, size = 18, stroke = 1.8 }) {
   return <svg {...common}>{paths[name] || paths.spark}</svg>;
 }
 
-/* Fila horizontal sem barra visível: roda do rato, arrastar e esbatido nas pontas */
+/* Fila horizontal sem barra visível: roda do rato, arrastar, auto-scroll nas pontas e esbatido */
 export function ScrollRow({ className = '', children, ...props }) {
   const ref = useRef(null);
   const drag = useRef({ active: false, moved: false, startX: 0, startLeft: 0 });
+  const pointerX = useRef(null);
+  const frame = useRef(0);
   const [edges, setEdges] = useState({ left: false, right: false });
 
   const update = useCallback(() => {
@@ -57,6 +59,24 @@ export function ScrollRow({ className = '', children, ...props }) {
     setEdges((previous) => (previous.left === left && previous.right === right ? previous : { left, right }));
   }, []);
 
+  const edgeScroll = useCallback(() => {
+    frame.current = 0;
+    const element = ref.current;
+    if (!element || pointerX.current === null || drag.current.active) return;
+    const rect = element.getBoundingClientRect();
+    const zone = Math.min(120, rect.width * 0.2);
+    const position = pointerX.current - rect.left;
+    let speed = 0;
+    if (position < zone) speed = -(1 - Math.max(position, 0) / zone) * 14;
+    else if (position > rect.width - zone) speed = (1 - Math.max(rect.width - position, 0) / zone) * 14;
+    if (!speed) return;
+    const max = element.scrollWidth - element.clientWidth;
+    const next = Math.max(0, Math.min(max, element.scrollLeft + speed));
+    if (next === element.scrollLeft) return;
+    element.scrollLeft = next;
+    frame.current = requestAnimationFrame(edgeScroll);
+  }, []);
+
   useEffect(() => {
     const element = ref.current;
     if (!element) return undefined;
@@ -65,15 +85,14 @@ export function ScrollRow({ className = '', children, ...props }) {
       if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
       const max = element.scrollWidth - element.clientWidth;
       if (max <= 0) return;
-      if ((event.deltaY < 0 && element.scrollLeft <= 0) || (event.deltaY > 0 && element.scrollLeft >= max - 1)) return;
       event.preventDefault();
       element.scrollLeft = Math.max(0, Math.min(max, element.scrollLeft + event.deltaY));
     };
     const onMove = (event) => {
       if (!drag.current.active) return;
       const distance = event.clientX - drag.current.startX;
-      if (Math.abs(distance) > 5) drag.current.moved = true;
-      element.scrollLeft = drag.current.startLeft - distance;
+      if (!drag.current.moved && Math.abs(distance) > 5) { drag.current.moved = true; element.classList.add('is-dragging'); }
+      if (drag.current.moved) element.scrollLeft = drag.current.startLeft - distance;
     };
     const onUp = () => { drag.current.active = false; element.classList.remove('is-dragging'); };
     element.addEventListener('wheel', onWheel, { passive: false });
@@ -85,6 +104,7 @@ export function ScrollRow({ className = '', children, ...props }) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('resize', update);
+      cancelAnimationFrame(frame.current);
     };
   }, [update]);
 
@@ -97,8 +117,12 @@ export function ScrollRow({ className = '', children, ...props }) {
     onMouseDown={(event) => {
       if (event.button !== 0 || !ref.current) return;
       drag.current = { active: true, moved: false, startX: event.clientX, startLeft: ref.current.scrollLeft };
-      ref.current.classList.add('is-dragging');
     }}
+    onMouseMove={(event) => {
+      pointerX.current = event.clientX;
+      if (!frame.current && !drag.current.active) frame.current = requestAnimationFrame(edgeScroll);
+    }}
+    onMouseLeave={() => { pointerX.current = null; cancelAnimationFrame(frame.current); frame.current = 0; }}
     onClickCapture={(event) => { if (drag.current.moved) { event.preventDefault(); event.stopPropagation(); drag.current.moved = false; } }}
     {...props}
   >{children}</div>;

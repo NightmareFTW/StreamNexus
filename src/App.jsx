@@ -521,7 +521,37 @@ function App() {
     };
   }, [isPlayerOpen, playing?.url]);
 
+  useEffect(() => {
+    const video = playerVideoRef.current;
+    if (!isPlayerOpen || !video || !playing?.hls || !playing.url) return undefined;
+    let hls = null;
+    let cancelled = false;
+    let recovered = false;
+    const fail = () => { if (!cancelled) fallbackLiveToPipe().then((switched) => { if (!switched && !cancelled) setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.'); }); };
+    import('hls.js').then(({ default: Hls }) => {
+      if (cancelled) return;
+      if (!Hls.isSupported()) { fail(); return; }
+      hls = new Hls({ enableWorker: false, maxBufferLength: 30, liveSyncDurationCount: 3, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 2 });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) return;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) { recovered = true; hls.recoverMediaError(); return; }
+        hls.destroy(); hls = null; fail();
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+      hls.loadSource(playing.url);
+      hls.attachMedia(video);
+    }).catch(fail);
+    return () => { cancelled = true; if (hls) hls.destroy(); };
+  }, [isPlayerOpen, playing?.url, playing?.hls]);
+
   const handleVideoError = async () => {
+    if (playing?.hls) { await fallbackLiveToPipe(); return; }
+    if (playing?.direct && playing.sourceUrl && window.streamnexus?.isDesktop) {
+      const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true });
+      setPlaying((current) => (current ? { ...current, ...stream, direct: false } : current));
+      return;
+    }
+    if (!playing?.live && playing?.piped && playing.sourceUrl && !playing.transcoded && window.streamnexus?.isDesktop) { await retryWithVideoConversion(); return; }
     let reason = 'O leitor integrado não conseguiu abrir este vídeo.';
     try {
       const info = playing?.id ? await window.streamnexus?.getStreamInfo(playing.id) : null;
@@ -536,7 +566,7 @@ function App() {
     setPlayerPlaybackError('');
     setPlaying((current) => current ? { ...current, url: '', id: '', converting: true } : current);
     const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true, live: Boolean(playing.live) });
-    setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true } : current);
+    setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true, direct: false } : current);
   };
 
   const togglePlayerPlayback = () => {
@@ -835,7 +865,7 @@ function App() {
     try {
       const stream = await window.streamnexus.prepareAudioStream(sourceUrl, options);
       audioStreamIdRef.current = stream.id;
-      return { ...stream, sourceUrl };
+      return { ...stream, sourceUrl, piped: !stream.direct };
     } catch (error) {
       if (options.live) throw error;
       return { url: sourceUrl, sourceUrl, audioWarning: getError(error) };
@@ -943,11 +973,37 @@ function App() {
     try { localStorage.setItem('streamnexus.tv.country', code); } catch { /* preferência só nesta sessão */ }
   };
 
+  const prepareLivePlayback = async (sourceUrl, preferHls = true) => {
+    const previousId = audioStreamIdRef.current;
+    audioStreamIdRef.current = '';
+    if (previousId) await window.streamnexus.stopAudioStream(previousId).catch(() => {});
+    if (preferHls && /\.m3u8(\?|$)/i.test(sourceUrl)) {
+      try {
+        const hlsStream = await window.streamnexus.prepareLiveHls(sourceUrl);
+        audioStreamIdRef.current = hlsStream.id;
+        return { ...hlsStream, sourceUrl, hls: true, piped: false };
+      } catch { /* usa o conversor como alternativa */ }
+    }
+    const stream = await window.streamnexus.prepareAudioStream(sourceUrl, { live: true });
+    audioStreamIdRef.current = stream.id;
+    return { ...stream, sourceUrl, hls: false, piped: true };
+  };
+
+  const fallbackLiveToPipe = async () => {
+    if (!playing?.live || playing.piped) return false;
+    try {
+      const stream = await prepareLivePlayback(playing.sourceUrl, false);
+      setPlayerPlaybackError('');
+      setPlaying((current) => (current ? { ...current, ...stream } : current));
+      return true;
+    } catch { return false; }
+  };
+
   const playLiveChannel = async (channel, streamIndex = 0) => {
     const stream = channel.streams?.[streamIndex];
     if (!stream) { notify('Este canal não tem emissões disponíveis.', 'error'); return; }
     try {
-      const playbackStream = await preparePlayerAudio(stream.url, { live: true });
+      const playbackStream = await prepareLivePlayback(stream.url);
       setEmbeddedSubtitleTracks([]);
       setActiveEmbeddedTrack(null);
       setPlayerPlaybackError('');
@@ -1421,13 +1477,13 @@ function App() {
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.url} onClick={togglePlayerPlayback} onError={handleVideoError}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
-              <div className="player-title"><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong>{playing?.audioWarning && <small className="audio-hint">O áudio pode não ser compatível. {playing.audioWarning} Também podes abrir com VLC.</small>}</div>
+              <div className="player-title"><span className="eyebrow">{playing?.live ? `AO VIVO · ${(playing.live.channel.creator || '').toUpperCase()}` : 'A REPRODUZIR A PARTIR DA TUA NUVEM'}</span><strong>{playing?.title}</strong>{playing?.audioWarning && <small className="audio-hint">O áudio pode não ser compatível. {playing.audioWarning} Também podes abrir com VLC.</small>}</div>
               <div className="player-top-actions"><span className="quality-tag">{playing?.live ? 'AO VIVO' : 'REAL-DEBRID'}</span>{playing?.sourceUrl && !playing?.live && <button className="player-icon-button" aria-label="Abrir com VLC" title="Abrir com VLC" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={19}/></button>}<button className="player-icon-button" aria-label="Fechar filme" title="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close" size={21}/></button></div>
             </div>
 
