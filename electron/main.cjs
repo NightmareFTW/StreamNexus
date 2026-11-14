@@ -434,7 +434,7 @@ async function fetchAdultDiscovery() {
     }
     if (!ids.size) return { eyebrow: shelf.eyebrow, title: shelf.title, items: [] };
     const data = await tmdbRequest(`/discover/movie?language=pt-PT&include_adult=true&sort_by=popularity.desc&with_keywords=${[...ids].join('|')}`, tmdbApiKey);
-    const items = (data.results || []).filter((item) => item.poster_path).map((item) => ({ ...normalizeTmdbItem({ ...item, media_type: 'movie' }, baseUrl, sizes), adult: true }));
+    const items = (data.results || []).filter((item) => item.poster_path).map((item) => ({ ...normalizeTmdbItem({ ...item, media_type: 'movie' }, baseUrl, sizes), adult: true, genre: shelf.title, genres: [shelf.title] }));
     return { eyebrow: shelf.eyebrow, title: shelf.title, items };
   }));
   if (!rows.some((row) => row.items.length)) throw new Error('O TMDB não devolveu títulos para esta categoria.');
@@ -532,6 +532,79 @@ function validateLiveStreamUrl(value) {
   const url = String(value || '');
   if (!liveStreamMeta.has(url)) throw new Error('Esta emissão já não está disponível. Volta a abrir a lista de canais.');
   return url;
+}
+
+// ---- Adultos (+18): APIs públicas do RedTube, Pornhub (Webmasters) e Eporner ----
+const ADULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const adultVideoCache = new Map();
+const ADULT_ROWS = [
+  { eyebrow: 'EM ALTA', title: 'Mais vistos da semana', rt: { ordering: 'mostviewed', period: 'weekly' }, ph: { ordering: 'mostviewed', period: 'weekly' }, ep: 'top-weekly' },
+  { eyebrow: 'ACABADOS DE CHEGAR', title: 'Novidades', rt: { ordering: 'newest' }, ph: { ordering: 'newest' }, ep: 'latest' },
+  { eyebrow: 'ESCOLHA DOS UTILIZADORES', title: 'Mais bem avaliados', rt: { ordering: 'rating', period: 'weekly' }, ph: { ordering: 'rating', period: 'weekly' }, ep: 'top-rated' },
+];
+
+async function fetchAdultJson(url) {
+  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': ADULT_UA } });
+  if (!response.ok) throw new Error(`A fonte respondeu com erro ${response.status}.`);
+  return response.json();
+}
+
+function adultVideoItem(sourceLabel, code, id, title, thumb, duration, views, embedUrl, tags) {
+  const poster = String(thumb || '').replace(/^http:/, 'https:');
+  const labels = (tags || []).map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 4);
+  return {
+    id: `xxx-${code}-${id}`, type: 'Vídeo', title: String(title || 'Sem título').trim(), original: String(title || '').trim(), creator: `${sourceLabel} · ${duration || '—'}`,
+    source: sourceLabel, year: '', rating: '', genre: labels[0] || 'Vídeo', genres: labels, runtime: duration || '', poster, backdrop: poster,
+    description: `${duration || ''} · ${Number(views || 0).toLocaleString('pt-PT')} visualizações · ${sourceLabel}`, embedUrl, accent: '#b30d1b',
+  };
+}
+
+async function fetchRedtubeVideos({ ordering, period }, term) {
+  const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: '1', ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}) });
+  const data = await fetchAdultJson(`https://api.redtube.com/?${params}`);
+  return (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
+}
+
+async function fetchPornhubVideos({ ordering, period }, term) {
+  const params = new URLSearchParams({ ordering, thumbsize: 'large', page: '1', ...(period ? { period } : {}), ...(term ? { search: term } : {}) });
+  const data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
+  return (data.videos || []).map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
+}
+
+async function fetchEpornerVideos(order, term) {
+  const params = new URLSearchParams({ query: term || 'all', per_page: '30', page: '1', thumbsize: 'big', order, gay: '0', lq: '0', format: 'json' });
+  const data = await fetchAdultJson(`https://www.eporner.com/api/v2/video/search/?${params}`);
+  return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()))).filter((item) => item.poster && item.embedUrl);
+}
+
+function interleaveAdult(lists, limit = 24) {
+  const seen = new Set();
+  const out = [];
+  for (let index = 0; out.length < limit && lists.some((list) => index < list.length); index += 1) {
+    for (const list of lists) {
+      const item = list[index];
+      const key = item?.title.toLowerCase();
+      if (!item || seen.has(key)) continue;
+      seen.add(key); out.push(item);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+async function fetchAdultVideos(value = {}) {
+  const term = String(value.term || '').toLowerCase().trim();
+  if (term && !/^[a-z0-9 -]{1,40}$/.test(term)) throw new Error('Categoria inválida.');
+  const cached = adultVideoCache.get(term);
+  if (cached && Date.now() - cached.at < DISCOVERY_TTL) return cached.rows;
+  const specs = term ? ADULT_ROWS.slice(0, 2) : ADULT_ROWS;
+  const rows = await Promise.all(specs.map(async (spec) => {
+    const settled = await Promise.allSettled([fetchRedtubeVideos(spec.rt, term), fetchPornhubVideos(spec.ph, term), fetchEpornerVideos(spec.ep, term)]);
+    return { eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : []))) };
+  }));
+  if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível contactar as fontes (RedTube, Pornhub e Eporner). Tenta novamente mais tarde.');
+  adultVideoCache.set(term, { at: Date.now(), rows });
+  return rows;
 }
 
 async function fetchDiscovery({ kind } = {}) {
@@ -989,7 +1062,7 @@ function configureContentSecurityPolicy() {
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
-    "frame-src https://www.youtube-nocookie.com",
+    "frame-src https://www.youtube-nocookie.com https://embed.redtube.com https://www.pornhub.com https://www.eporner.com",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",
@@ -1022,6 +1095,7 @@ function registerIpc() {
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('discovery:fetch', resultHandler(fetchDiscovery));
+  ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));

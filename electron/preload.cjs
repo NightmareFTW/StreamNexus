@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   testSpotify: (value) => invokeRequest('spotify:test', value),
   fetchLiveCountries: () => invokeRequest('tv:countries'),
   fetchLiveChannels: (country) => invokeRequest('tv:channels', { country }),
+  fetchAdultVideos: (term) => invokeRequest('adult:videos', { term }),
   fetchTrailer: (value) => invokeRequest('tmdb:trailer', value),
   openExternalPlayer: (url) => invokeRequest('player:external', url),
   prepareAudioStream: (url, options = {}) => invokeRequest('player:prepare-audio', { url, transcodeVideo: Boolean(options.transcodeVideo), live: Boolean(options.live) }),

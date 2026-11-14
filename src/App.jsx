@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
+import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
 const RD_OAUTH = 'https://api.real-debrid.com/oauth/v2';
@@ -384,14 +385,15 @@ function App() {
     if (current && current.status !== 'error') return;
     if (activePage === 'tv' && tvMode !== 'shows') return;
     if ((activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey) return;
-    if (activePage === 'adult' && !adultEnabled) return;
+    if (activePage === 'adult' && (!adultEnabled || adultMode !== 'cinema')) return;
     loadDiscovery(activePage);
-  }, [activePage, tvMode, adultEnabled, integrationSettings.tmdbApiKey]);
+  }, [activePage, tvMode, adultMode, adultEnabled, integrationSettings.tmdbApiKey]);
 
   const discoveryLookup = useMemo(() => Object.values(discovery).flatMap((entry) => (entry.rows || []).flatMap((row) => row.items)), [discovery]);
   const discoveryPage = DISCOVERY_PAGES.includes(activePage) && (activePage !== 'adult' || adultEnabled);
   const discoveryState = discovery[activePage];
-  const discoveryShelves = discoveryPage ? (discoveryState?.rows || []) : [];
+  const catalogIdSet = new Set(catalogTitles.map((item) => item.id));
+  const discoveryShelves = discoveryPage ? (discoveryState?.rows || []).map((row) => (activePage === 'adult' ? { ...row, items: row.items.filter((item) => !catalogIdSet.has(item.id)) } : row)) : [];
   const discoveryItems = [...new Map(discoveryShelves.flatMap((row) => row.items).filter((item) => item.poster).map((item) => [item.id, item])).values()];
 
   const featuredTitles = discoveryPage ? discoveryItems.slice(0, 10) : activePage === 'films'
@@ -883,6 +885,31 @@ function App() {
     setSubtitleStatus('original');
   };
 
+  const [adultMode, setAdultMode] = useState('videos');
+  const [adultCategory, setAdultCategory] = useState('Todos');
+  const [adultVideos, setAdultVideos] = useState({ status: 'idle', rows: [], message: '' });
+  const adultRequestRef = useRef(0);
+
+  const loadAdultVideos = useCallback(async (label) => {
+    if (!window.streamnexus?.isDesktop) {
+      setAdultVideos({ status: 'error', rows: [], message: 'Esta secção está disponível na app desktop.' });
+      return;
+    }
+    const requestId = ++adultRequestRef.current;
+    setAdultVideos((current) => ({ ...current, status: 'loading', message: '' }));
+    try {
+      const term = ADULT_CATEGORIES.find((entry) => entry.label === label)?.term || '';
+      const rows = await window.streamnexus.fetchAdultVideos(term);
+      if (requestId === adultRequestRef.current) setAdultVideos({ status: 'ready', rows, message: '' });
+    } catch (error) {
+      if (requestId === adultRequestRef.current) setAdultVideos({ status: 'error', rows: [], message: getError(error) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos(adultCategory);
+  }, [activePage, adultEnabled, adultMode, adultCategory, loadAdultVideos]);
+
   const [tvMode, setTvMode] = useState('channels');
   const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
   const [liveCountries, setLiveCountries] = useState([]);
@@ -1252,9 +1279,12 @@ function App() {
           </section>
         ) : activePage === 'tv' && tvMode === 'channels' && !query ? (
           <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
+        ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
+          <AdultVideosPage mode={adultMode} onMode={setAdultMode} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos(adultCategory)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
             {activePage === 'tv' && <TvModeTabs mode={tvMode} onMode={setTvMode}/>}
+            {activePage === 'adult' && <AdultModeTabs mode={adultMode} onMode={setAdultMode}/>}
             {genre === 'Todos' && activePage !== 'books' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
               <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : activePage === 'tv' ? 'PROGRAMAS EM DESTAQUE' : activePage === 'music' ? 'ÁLBUNS EM DESTAQUE' : activePage === 'books' ? 'LIVROS EM DESTAQUE' : activePage === 'adult' ? 'EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'}{activePage === 'home' && ` ${featuredTitle.type.toUpperCase()}`}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.creator || featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta">{featuredTitle.rating && <><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i></>}<span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}>{isVideoTitle(featuredTitle) ? <Icon name="play" size={17}/> : <Icon name="spark" size={17}/>}{isVideoTitle(featuredTitle) ? 'Ver agora' : 'Ver detalhes'}</button>{isVideoTitle(featuredTitle) && <button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button>}<button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
@@ -1322,6 +1352,14 @@ function App() {
             <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
           </div>
+        </div>}
+
+        {modal.type === 'embed' && modal.item && <div className="embed-modal modal-card">
+          <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
+          <span className="eyebrow">{modal.item.source?.toUpperCase()} · LEITOR INCORPORADO</span>
+          <h2>{modal.item.title}</h2>
+          <div className="embed-frame"><iframe title={modal.item.title} src={modal.item.embedUrl} allow="autoplay; fullscreen; encrypted-media" allowFullScreen referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-presentation"/></div>
+          <small className="embed-note">Vídeo reproduzido a partir de {modal.item.source}. A StreamNexus não aloja nem descarrega este conteúdo.</small>
         </div>}
 
         {modal.type === 'integrations' && <div className="integration-modal modal-card">
