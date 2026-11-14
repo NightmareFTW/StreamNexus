@@ -609,3 +609,18 @@ html, body { background: #070707; }
 .player-playback-error { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; justify-items: center; gap: 9px; width: min(390px,calc(100vw - 36px)); padding: 18px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; background: rgba(15,15,15,.94); text-align: center; transform: translate(-50%,-50%); }
 .player-playback-error strong { color: #fff; font-size: 13px; }.player-playback-error > span { color: #bbb; font-size: 10px; }
 .player-title .audio-hint { max-width: min(68vw,700px); margin: 0; color: #efb975; font-size: 10px; line-height: 1.4; }
+
+/* Pesquisa no catálogo (sidebar) */
+.sidebar-search { display: flex; align-items: center; gap: 9px; height: 38px; margin: 0 0 22px; padding: 0 11px; border: 1px solid rgba(255,255,255,.075); border-radius: 9px; background: rgba(255,255,255,.025); color: #797a84; transition: .2s ease; }
+.sidebar-search:focus-within { border-color: rgba(166,139,255,.45); background: rgba(255,255,255,.045); }
+.sidebar-search input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: #edecf2; font-size: 12px; }
+.sidebar-search input::placeholder { color: #777883; }
+
+/* Escolha de ficheiro em torrents com vários vídeos */
+.files-modal { max-width: 640px; width: 100%; }
+.files-list { display: grid; gap: 6px; max-height: 52vh; overflow-y: auto; margin-top: 14px; }
+.files-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 13px; border: 1px solid rgba(255,255,255,.075); border-radius: 9px; background: rgba(255,255,255,.03); color: #e4e2ea; text-align: left; cursor: pointer; transition: .2s ease; }
+.files-option:hover { border-color: rgba(166,139,255,.45); background: rgba(130,99,232,.12); }
+.files-option span { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.files-option strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.files-option small { flex: 0 0 auto; color: #81828d; font-size: 11px; }

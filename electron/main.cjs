@@ -632,6 +632,7 @@ function configureContentSecurityPolicy() {
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
+    "frame-src https://www.youtube-nocookie.com",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",

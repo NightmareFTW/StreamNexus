@@ -27,6 +27,29 @@ function matchesTorrentTitle(torrent, title) {
   });
 }
 
+const VIDEO_FILE_PATTERN = /\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|wmv|mpe?g)$/i;
+
+// O Real-Debrid devolve um link por ficheiro selecionado, pela mesma ordem de `files`.
+function getPlayableEntries(details) {
+  const links = details?.links || [];
+  const selected = (details?.files || []).filter((file) => file.selected === 1);
+  const all = links.map((_, linkIndex) => {
+    const file = selected.length === links.length ? selected[linkIndex] : null;
+    const path = file?.path || '';
+    return { linkIndex, name: path ? path.replace(/^\//, '') : `Ficheiro ${linkIndex + 1}`, bytes: Number(file?.bytes) || 0 };
+  });
+  const videos = all.filter((entry) => VIDEO_FILE_PATTERN.test(entry.name));
+  return videos.length ? videos : all;
+}
+
+// Filmes: escolhe o maior vídeo. Séries ou desconhecido com vários vídeos: pede ao utilizador.
+function pickPlayableEntry(details, titleHint) {
+  const entries = getPlayableEntries(details);
+  if (entries.length <= 1) return { entry: entries[0] || null };
+  if (titleHint?.type === 'Filme') return { entry: [...entries].sort((a, b) => b.bytes - a.bytes)[0] };
+  return { choose: [...entries].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
+}
+
 const titles = [
   { id: 'dune2', title: 'Dune: Parte Dois', original: 'Dune: Part Two', type: 'Filme', year: 2024, rating: '8.6', genre: 'Ficção científica', runtime: '2h 46m', poster: 'https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg', backdrop: 'https://image.tmdb.org/t/p/w1280/xOMo8BRK7PfcJv9JCnx7s5hj0PX.jpg', description: 'Paul Atreides une-se a Chani e aos Fremen numa jornada de vingança e destino, entre as areias de Arrakis.', tag: 'EM DESTAQUE', accent: '#c28d5d' },
   { id: 'oppenheimer', title: 'Oppenheimer', original: 'Oppenheimer', type: 'Filme', year: 2023, rating: '8.3', genre: 'Drama', runtime: '3h 00m', poster: 'https://image.tmdb.org/t/p/w500/ptpr0kGAckfQkJeJIt8st5dglvd.jpg', backdrop: 'https://image.tmdb.org/t/p/w1280/ptpr0kGAckfQkJeJIt8st5dglvd.jpg', description: 'A história do físico J. Robert Oppenheimer e do papel que desempenhou na criação da bomba atómica.', tag: 'MAIS VISTO', accent: '#c77a46' },
@@ -541,9 +564,16 @@ function App() {
         const details = await callRd(`/torrents/info/${encodeURIComponent(playing.torrentId)}`);
         if (cancelled) return;
         if (details.links?.length) {
-          const unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
+          const picked = pickPlayableEntry(details, playing.metadata);
+          if (picked.choose) {
+            setPlaying(null);
+            setModal({ type: 'files', torrent: { id: playing.torrentId, filename: details.filename }, titleHint: playing.metadata, entries: picked.choose });
+            return;
+          }
+          const chosenLink = details.links[picked.entry?.linkIndex ?? 0];
+          const unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: chosenLink } });
           if (cancelled) return;
-          const sourceUrl = unrestricted.download || details.links[0];
+          const sourceUrl = unrestricted.download || chosenLink;
           const playbackStream = await preparePlayerAudio(sourceUrl);
           if (cancelled) {
             if (playbackStream.id) window.streamnexus?.stopAudioStream(playbackStream.id).catch(() => {});
@@ -758,19 +788,28 @@ function App() {
     }
   };
 
-  const openTorrentStream = async (torrent, titleHint = null) => {
+  const openTorrentStream = async (torrent, titleHint = null, chosenLinkIndex = null) => {
     try {
       let details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
       if (details.status === 'waiting_files_selection') {
         await callRd(`/torrents/selectFiles/${encodeURIComponent(torrent.id)}`, { method: 'POST', body: { files: 'all' } });
         details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
       }
-      const fileName = torrent.filename || details.filename || 'O teu conteúdo';
+      let fileName = torrent.filename || details.filename || 'O teu conteúdo';
       const title = titleHint || { title: fileName, original: fileName };
       let streamUrl = '';
       if (details.links?.length) {
-        const data = await callRd('/unrestrict/link', { method: 'POST', body: { link: details.links[0] } });
-        streamUrl = data.download || details.links[0];
+        let linkIndex = chosenLinkIndex;
+        if (linkIndex == null) {
+          const picked = pickPlayableEntry(details, titleHint);
+          if (picked.choose) { setModal({ type: 'files', torrent, titleHint, entries: picked.choose }); return; }
+          linkIndex = picked.entry?.linkIndex ?? 0;
+        }
+        const chosenLink = details.links[linkIndex] || details.links[0];
+        const entryName = getPlayableEntries(details).find((entry) => entry.linkIndex === linkIndex)?.name;
+        if (entryName && !/^Ficheiro \d+$/.test(entryName)) fileName = entryName.split('/').pop();
+        const data = await callRd('/unrestrict/link', { method: 'POST', body: { link: chosenLink } });
+        streamUrl = data.download || chosenLink;
       }
       const playbackStream = streamUrl ? await preparePlayerAudio(streamUrl) : { url: '', sourceUrl: '' };
       setEmbeddedSubtitleTracks([]);
@@ -1039,6 +1078,10 @@ function App() {
           <span className="brand-word">stream<span>nexus</span><small>O teu próximo favorito</small></span>
         </a>
 
+        <form className="sidebar-search" role="search" onSubmit={(event) => event.preventDefault()}>
+          <Icon name="search" size={15}/>
+          <input type="search" aria-label="Pesquisar no catálogo" placeholder="Pesquisar filmes e séries" value={query} onChange={(event) => { setQuery(event.target.value); if (!['home', 'films', 'series', 'watchlist'].includes(activePage)) setActivePage('home'); setProfileMenuOpen(false); }}/>
+        </form>
         <div className="side-section">
           <nav className="side-nav" aria-label="Navegação principal">
             {nav.map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
@@ -1190,6 +1233,8 @@ function App() {
         {modal.type === 'magnet' && <div className="magnet-modal modal-card"><button className="modal-close" aria-label="Fechar" onClick={() => { setModal(null); setRdError(''); }}><Icon name="close"/></button><div className="modal-emblem magnet-emblem"><Icon name="link" size={24}/></div><span className="eyebrow">REAL-DEBRID · ADICIONAR CONTEÚDO</span><h2>{modal.title ? `Ver ${modal.title.title}` : 'Adicionar um magnet'}</h2><p className="connect-lead">Cola um magnet da tua coleção. O ficheiro é enviado diretamente para a tua conta Real-Debrid.</p><form onSubmit={addMagnet}><label className="input-label" htmlFor="magnet-input">Link magnet</label><textarea id="magnet-input" className="magnet-input" placeholder="magnet:?xt=urn:btih:…" rows="3" value={magnet} onChange={(event) => setMagnet(event.target.value)} autoFocus/><div className="magnet-hint"><span><Icon name="cloud" size={14}/>A ligação é feita diretamente à API Real-Debrid.</span><span>Não guardamos o link.</span></div>{rdError && <div className="inline-error"><Icon name="alert" size={16}/>{rdError}</div>}<button className="button button-primary connect-cta" disabled={magnetBusy || !session?.access_token || !magnet.trim()}><Icon name="plus" size={16}/>{magnetBusy ? 'A enviar para a nuvem…' : 'Adicionar à biblioteca'}<Icon name="chevron" size={15}/></button></form></div>}
 
         {modal.type === 'downloads' && <div className="modal-card small-confirm"><div className="modal-emblem magnet-emblem"><Icon name="cloud" size={24}/></div><span className="eyebrow">REAL-DEBRID</span><h2>Magnet enviado</h2><p>O conteúdo foi enviado para a tua conta. A transferência pode demorar alguns instantes a ficar pronta.</p><div className="small-confirm-actions"><button className="button button-quiet" onClick={() => setModal(null)}>Fechar</button><button className="button button-primary" onClick={() => { setModal(null); setActivePage('downloads'); loadRdAccount(); }}>Ver biblioteca <Icon name="chevron" size={14}/></button></div></div>}
+
+        {modal.type === 'files' && <div className="modal-card files-modal"><button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button><span className="eyebrow">REAL-DEBRID · VÁRIOS FICHEIROS</span><h2>Escolhe o que reproduzir</h2><p className="connect-lead">Este torrent tem {modal.entries.length} vídeos. Seleciona o episódio ou ficheiro que queres ver.</p><div className="files-list">{modal.entries.map((entry) => <button key={entry.linkIndex} className="files-option" onClick={() => openTorrentStream(modal.torrent, modal.titleHint, entry.linkIndex)}><span><Icon name="play" size={14}/><strong title={entry.name}>{entry.name}</strong></span><small>{formatBytes(entry.bytes)}</small></button>)}</div></div>}
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
