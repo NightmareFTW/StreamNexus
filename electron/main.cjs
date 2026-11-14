@@ -980,9 +980,10 @@ function probeMedia(executable, sourceUrl, inputArgs = []) {
         video: videoLine?.[1]?.toLowerCase() || '',
         tenBit: Boolean(videoLine && /10le|p10|10be/i.test(videoLine[0])),
         audio: output.match(/Audio:\s*([a-z0-9_]+)/i)?.[1]?.toLowerCase() || '',
+        duration: (() => { const found = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/); return found ? Number(found[1]) * 3600 + Number(found[2]) * 60 + Number(found[3]) : 0; })(),
       };
     };
-    child.once('error', () => { clearTimeout(timer); resolve({ container: '', video: '', tenBit: false, audio: '' }); });
+    child.once('error', () => { clearTimeout(timer); resolve({ container: '', video: '', tenBit: false, audio: '', duration: 0 }); });
     child.once('close', () => { clearTimeout(timer); resolve(parse()); });
   });
 }
@@ -994,19 +995,20 @@ function canPlayDirectly(info) {
 
 async function prepareAudioStream(value) {
   const live = Boolean(value?.live);
+  const startAt = Math.max(0, Number(value?.startAt) || 0);
   const sourceUrl = live ? validateLiveStreamUrl(value?.url) : validateRealDebridStreamUrl(value?.url);
   const liveMeta = live ? liveStreamMeta.get(sourceUrl) || {} : {};
   const inputArgs = [
     ...(liveMeta.userAgent ? ['-user_agent', liveMeta.userAgent] : []),
     ...(liveMeta.referrer ? ['-referer', liveMeta.referrer] : []),
     ...(liveMeta.origin ? ['-headers', `Origin: ${liveMeta.origin}\r\n`] : []),
-    ...(live ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4'] : []),
+    ...(live ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4'] : ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '429,5xx', '-reconnect_delay_max', '15', '-rw_timeout', '60000000']),
   ];
   const executable = await findFfmpegExecutable();
   let probed = null;
   if (!live && !value?.transcodeVideo && !value?.forcePipe) {
     probed = await probeMedia(executable, sourceUrl, inputArgs);
-    if (canPlayDirectly(probed)) return { id: '', url: sourceUrl, direct: true, videoCodec: probed.video, audioCodec: probed.audio };
+    if (canPlayDirectly(probed)) return { id: '', url: sourceUrl, direct: true, videoCodec: probed.video, audioCodec: probed.audio, ...(probed.duration ? { totalDuration: probed.duration } : {}) };
   }
   const id = randomUUID();
   const token = randomUUID();
@@ -1033,7 +1035,7 @@ async function prepareAudioStream(value) {
       ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-vf', "scale=-2:'min(1080,ih)'"]
       : ['-c:v', 'copy', ...(stream.videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
     const args = [
-      '-hide_banner', '-loglevel', 'error', ...inputArgs, '-i', sourceUrl,
+      '-hide_banner', '-loglevel', 'error', ...inputArgs, ...(startAt ? ['-ss', String(startAt)] : []), '-i', sourceUrl,
       '-map', '0:v:0?', '-map', '0:a:0?',
       ...videoArgs, '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
       '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1',
@@ -1080,7 +1082,7 @@ async function prepareAudioStream(value) {
   });
   audioStreams.set(id, stream);
   const { port } = stream.server.address();
-  return { id, url: `http://127.0.0.1:${port}/${token}` };
+  return { id, url: `http://127.0.0.1:${port}/${token}`, ...(probed?.duration ? { totalDuration: probed.duration } : {}) };
 }
 
 // ---- Reprodução HLS direta: proxy local que acrescenta os cabeçalhos exigidos e o CORS ----
@@ -1165,7 +1167,11 @@ async function stopAudioStream(id) {
   if (!stream) return false;
   audioStreams.delete(stream.id);
   if (stream.child && !stream.child.killed) stream.child.kill();
-  if (stream.server?.listening) await new Promise((resolve) => stream.server.close(resolve));
+  if (stream.server?.listening) {
+    // sem isto, o fecho espera que o leitor largue a ligação (vários segundos) e atrasa a reprodução seguinte
+    stream.server.closeAllConnections?.();
+    await new Promise((resolve) => stream.server.close(resolve));
+  }
   return true;
 }
 

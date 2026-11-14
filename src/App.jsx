@@ -553,7 +553,11 @@ function App() {
       setPlaying((current) => (current ? { ...current, ...stream, direct: false } : current));
       return;
     }
-    if (!playing?.live && playing?.piped && playing.sourceUrl && !playing.transcoded && window.streamnexus?.isDesktop) { await retryWithVideoConversion(); return; }
+    if (!playing?.live && playing?.piped && playing.sourceUrl && window.streamnexus?.isDesktop) {
+      const position = (playing.offset || 0) + (playerVideoRef.current?.currentTime || 0);
+      if (position > 5 && (playing.resumes || 0) < 6) { await resumePlayback(position); return; }
+      if (!playing.transcoded) { await retryWithVideoConversion(); return; }
+    }
     let reason = 'O leitor integrado não conseguiu abrir este vídeo.';
     try {
       const info = playing?.id ? await window.streamnexus?.getStreamInfo(playing.id) : null;
@@ -571,6 +575,29 @@ function App() {
     setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true, direct: false } : current);
   };
 
+  const resumePlayback = async (position, exact = false) => {
+    if (!playing?.sourceUrl || playing.resuming) return;
+    const startAt = Math.max(0, Math.floor(position) - (exact ? 0 : 3));
+    setPlayerPlaybackError('');
+    setPlaying((current) => (current ? { ...current, url: '', id: '', resuming: true } : current));
+    const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, transcodeVideo: Boolean(playing.transcoded), startAt });
+    if (stream.audioWarning) {
+      setPlaying((current) => (current ? { ...current, resuming: false } : current));
+      setPlayerPlaybackError(`Não foi possível retomar a reprodução. ${stream.audioWarning}`);
+      return;
+    }
+    setPlaying((current) => (current ? { ...current, ...stream, resuming: false, direct: false, offset: startAt, resumes: exact ? current.resumes || 0 : (current.resumes || 0) + 1 } : current));
+  };
+
+  const handleVideoEnded = () => {
+    if (!playing?.piped || playing.live || !playing.totalDuration || playing.resuming) return;
+    const position = (playing.offset || 0) + (playerVideoRef.current?.currentTime || 0);
+    if (position < playing.totalDuration - 45 && (playing.resumes || 0) < 6) resumePlayback(position);
+  };
+
+  const pipedSeek = Boolean(playing?.piped && !playing.live && playing.totalDuration);
+  const [seekDraft, setSeekDraft] = useState(null);
+
   const togglePlayerPlayback = () => {
     const video = playerVideoRef.current;
     if (!video) return;
@@ -581,6 +608,12 @@ function App() {
 
   const seekPlayer = (seconds) => {
     const video = playerVideoRef.current;
+    if (pipedSeek) {
+      const base = (playing.offset || 0) + (video?.currentTime || 0);
+      resumePlayback(Math.min(Math.max(base + seconds, 0), playing.totalDuration - 5), true);
+      revealPlayerControls();
+      return;
+    }
     if (!video) return;
     const start = video.seekable.length ? video.seekable.start(0) : 0;
     const end = Number.isFinite(video.duration) ? video.duration : video.seekable.length ? video.seekable.end(video.seekable.length - 1) : video.currentTime;
@@ -1536,9 +1569,9 @@ function App() {
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
-            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
@@ -1561,9 +1594,9 @@ function App() {
             </section>}
 
             <div className="player-bottom">
-              <input className="player-seek" aria-label="Posição do filme" type="range" min="0" max={playerDuration || playerSeekEnd || 1} step="0.1" value={playerDuration || playerSeekEnd ? Math.min(playerCurrentTime, playerDuration || playerSeekEnd) : 0} disabled={!playerDuration && !playerSeekEnd} onChange={(event) => setPlayerSeekPosition(event.target.value)}/>
+              <input className="player-seek" aria-label="Posição do filme" type="range" min="0" max={(pipedSeek ? playing.totalDuration : 0) || playerDuration || playerSeekEnd || 1} step="0.1" value={pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerDuration || playerSeekEnd ? Math.min(playerCurrentTime, playerDuration || playerSeekEnd) : 0} disabled={!pipedSeek && !playerDuration && !playerSeekEnd} onChange={(event) => (pipedSeek ? setSeekDraft(Number(event.target.value)) : setPlayerSeekPosition(event.target.value))} onPointerUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }} onKeyUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }}/>
               <div className="player-control-row">
-                <div className="player-control-group"><button className="player-icon-button" aria-label={playerPlaying ? 'Pausar' : 'Reproduzir'} onClick={togglePlayerPlayback}><Icon name={playerPlaying ? 'pause' : 'play'} size={21}/></button><button className="player-icon-button" aria-label="Recuar 10 segundos" onClick={() => seekPlayer(-10)}><Icon name="skipBack" size={20}/></button><button className="player-icon-button" aria-label="Avançar 10 segundos" onClick={() => seekPlayer(10)}><Icon name="skipForward" size={20}/></button><span className="player-time">{formatPlaybackTime(playerCurrentTime)} <i>/</i> {playerDuration ? formatPlaybackTime(playerDuration) : 'AO VIVO'}</span></div>
+                <div className="player-control-group"><button className="player-icon-button" aria-label={playerPlaying ? 'Pausar' : 'Reproduzir'} onClick={togglePlayerPlayback}><Icon name={playerPlaying ? 'pause' : 'play'} size={21}/></button><button className="player-icon-button" aria-label="Recuar 10 segundos" onClick={() => seekPlayer(-10)}><Icon name="skipBack" size={20}/></button><button className="player-icon-button" aria-label="Avançar 10 segundos" onClick={() => seekPlayer(10)}><Icon name="skipForward" size={20}/></button><span className="player-time">{formatPlaybackTime(pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerCurrentTime)} <i>/</i> {pipedSeek ? formatPlaybackTime(playing.totalDuration) : playerDuration ? formatPlaybackTime(playerDuration) : 'AO VIVO'}</span></div>
                 <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/><button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
               </div>
             </div>
