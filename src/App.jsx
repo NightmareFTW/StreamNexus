@@ -629,6 +629,25 @@ function App() {
     return () => window.removeEventListener('keydown', onShortcut);
   }, [activePage, modal]);
 
+  // Atalhos do leitor, ao estilo Netflix: espaço/K, setas, M, F, C. Sem lista de dependências para usar sempre o estado atual.
+  useEffect(() => {
+    if (!isPlayerOpen) return undefined;
+    const onPlayerKey = (event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '')) return;
+      const key = event.key.toLowerCase();
+      if (key === ' ' || key === 'k') togglePlayerPlayback();
+      else if (key === 'arrowleft' || key === 'j') seekPlayer(-10);
+      else if (key === 'arrowright' || key === 'l') seekPlayer(10);
+      else if (key === 'm') togglePlayerMute();
+      else if (key === 'f') togglePlayerFullscreen();
+      else if (key === 'c') { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', onPlayerKey);
+    return () => window.removeEventListener('keydown', onPlayerKey);
+  });
+
   useEffect(() => {
     const closeOnOutsideClick = (event) => {
       if (!profileMenuRef.current?.contains(event.target)) setProfileMenuOpen(false);
@@ -1159,9 +1178,10 @@ function App() {
             {searchResults.length ? <><div className="catalog-grid">{searchResults.slice(0, visibleCount).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>{visibleCount < searchResults.length && <div className="load-more-wrap"><button className="button button-quiet load-more" onClick={() => setVisibleCount((count) => Math.min(count + 24, searchResults.length))}>Carregar mais títulos <span>{Math.min(24, searchResults.length - visibleCount)} de {searchResults.length - visibleCount}</span></button></div>}</> : <div className="empty-list catalog-empty"><span><Icon name={activePage === 'watchlist' ? 'bookmark' : 'search'} size={22}/></span><strong>{activePage === 'watchlist' ? 'A tua lista ainda está vazia' : 'Não encontrámos esse título'}</strong><p>{activePage === 'watchlist' ? 'Guarda qualquer filme ou série com o botão +.' : 'Experimenta outro título ou género.'}</p>{activePage === 'watchlist' && <button className="text-link" onClick={() => setActivePage('home')}>Explorar catálogo <Icon name="chevron" size={14}/></button>}</div>}
           </section>
         )}
-        {['home', 'films', 'series'].includes(activePage) && !query && <div className={`catalog-status ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>}
         <footer className="footer"><span>© 2026 StreamNexus</span><span>Este produto usa a API do TMDB e não é endossado nem certificado pelo TMDB.</span><button onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Integrações <Icon name="settings" size={13}/></button></footer>
       </main>
+
+      <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
       {notice && !isPlayerOpen && <div className="toast"><span className="toast-check"><Icon name="check" size={14}/></span>{notice}</div>}
 

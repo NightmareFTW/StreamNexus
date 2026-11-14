@@ -624,3 +624,9 @@ html, body { background: #070707; }
 .files-option span { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .files-option strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .files-option small { flex: 0 0 auto; color: #81828d; font-size: 11px; }
+
+/* Barra de atualização fixa no fundo da app */
+.status-bar { position: fixed; z-index: 9; right: 0; bottom: 0; left: 244px; margin: 0; padding: 8px 42px; border-left: 0; border-top: 1px solid rgba(255,255,255,.07); background: rgba(11,12,17,.94); backdrop-filter: blur(14px); }
+.status-bar.is-error { border-top-color: rgba(234,161,95,.45); }
+.main-content { padding-bottom: 44px; }
+@media (max-width: 900px) { .status-bar { left: 0; padding: 8px 16px; } }
