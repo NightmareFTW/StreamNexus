@@ -14,11 +14,13 @@ export function AdultModeTabs({ mode, onMode }) {
   </div>;
 }
 
-export function AdultVideosPage({ mode, onMode, state, category, onCategory, onPlay, onRetry }) {
+export const ADULT_ORIENTATIONS = [['straight', 'Straight'], ['gay', 'Gay'], ['trans', 'Trans']];
+
+export function AdultVideosPage({ mode, onMode, orientation, onOrientation, state, category, onCategory, onPlay, onRetry }) {
   return <section className="live-tv adult-videos page-in">
     <div className="live-head">
       <div><span className="eyebrow"><span className="pulse-dot"></span> +18 · CONTEÚDO PARA ADULTOS</span><h1>Vídeos</h1><p>Catálogo das APIs públicas do RedTube, Pornhub e Eporner. Os vídeos reproduzem-se no leitor incorporado de cada site.</p></div>
-      <div className="live-controls"><AdultModeTabs mode={mode} onMode={onMode}/></div>
+      <div className="live-controls live-controls-col"><AdultModeTabs mode={mode} onMode={onMode}/><div className="mode-tabs" role="tablist" aria-label="Orientação">{ADULT_ORIENTATIONS.map(([key, label]) => <button key={key} role="tab" aria-selected={orientation === key} className={orientation === key ? 'active' : ''} onClick={() => onOrientation(key)}>{label}</button>)}</div></div>
     </div>
 
     <ScrollRow className="genre-chips" aria-label="Categorias">

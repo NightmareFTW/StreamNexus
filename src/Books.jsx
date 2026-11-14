@@ -187,3 +187,22 @@ export function BooksCollectionView({ view, reading, saved, onOpen, onSave }) {
     <div className="rd-badges">{badges.map(([title, text, value, target]) => { const done = value >= target; return <article key={title} className={`rd-badge ${done ? 'is-unlocked' : ''}`}><span><Icon name="trophy" size={22}/></span><strong>{title}</strong><small>{text}</small><span className="rd-progress"><i style={{ width: `${Math.min(100, value / target * 100)}%` }}></i></span><em>{Math.min(value, target)} / {target}</em></article>; })}</div>
   </section>;
 }
+
+export function BookSourcesPanel({ state, onOpen }) {
+  const data = state.data;
+  const library = data?.openLibrary;
+  const gutenberg = data?.gutenberg;
+  const nothing = state.status === 'ready' && !gutenberg && (!library || library.access === 'no_ebook');
+  return <section className="easy-sources">
+    <span className="eyebrow">LER OU OBTER</span>
+    {state.status === 'loading' && <p className="rd-empty-text"><span className="spinner"></span> A procurar fontes legais…</p>}
+    {state.status === 'error' && <p className="rd-empty-text">Não foi possível consultar as fontes agora.</p>}
+    {state.status === 'ready' && <div className="easy-list">
+      {gutenberg && <div className="easy-row"><span><strong>Project Gutenberg</strong><small>Domínio público · gratuito · {gutenberg.title}</small></span>
+        <div>{gutenberg.epub && <button className="button button-primary button-sm" onClick={() => onOpen(gutenberg.epub)}>EPUB</button>}{gutenberg.mobi && <button className="button button-quiet button-sm" onClick={() => onOpen(gutenberg.mobi)}>Kindle</button>}{gutenberg.html && <button className="button button-quiet button-sm" onClick={() => onOpen(gutenberg.html)}>Ler online</button>}</div></div>}
+      {library && library.access !== 'no_ebook' && <div className="easy-row"><span><strong>Internet Archive · Open Library</strong><small>{library.access === 'public' ? 'Leitura e descarga gratuitas' : 'Empréstimo gratuito (precisa de conta Internet Archive)'}</small></span>
+        <div>{library.archiveUrl && <button className="button button-primary button-sm" onClick={() => onOpen(library.archiveUrl)}>{library.access === 'public' ? 'Ler / descarregar' : 'Pedir emprestado'}</button>}<button className="button button-quiet button-sm" onClick={() => onOpen(library.url)}>Ver ficha</button></div></div>}
+      {nothing && <p className="rd-empty-text">Não há versão digital gratuita e legal deste livro. Podes tentar a pesquisa nos indexadores abaixo.</p>}
+    </div>}
+  </section>;
+}

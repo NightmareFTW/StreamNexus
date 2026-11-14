@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, session, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -284,6 +284,7 @@ function normalizeAlbum(album, index) {
     creator: album.artistName || '', year, rating: '', genre: album.primaryGenreName || 'Música', genres: album.primaryGenreName ? [album.primaryGenreName] : [],
     runtime: tracks ? `${tracks} faixas` : 'Álbum', poster: artwork, backdrop: artwork,
     description: [album.artistName, tracks ? `${tracks} faixas` : '', album.primaryGenreName].filter(Boolean).join(' · '),
+    source: 'Apple Music', embedUrl: `https://embed.music.apple.com/pt/album/album/${album.collectionId}`, embedHeight: 450, linkUrl: album.collectionViewUrl || '',
     searchQuery: `${album.artistName || ''} ${String(album.collectionName || '').replace(/\s*[\(\[].*$/, '')}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
   };
 }
@@ -335,6 +336,7 @@ function normalizeSpotifyAlbum(album, shelf, index) {
     id: `album-sp-${album.id}`, type: 'Álbum', title: album.name, original: album.name, creator: artists, year, rating: '',
     genre, genres: [genre], runtime: tracks ? `${tracks} faixas` : 'Álbum', poster: art, backdrop: art,
     description: [artists, tracks ? `${tracks} faixas` : '', year].filter(Boolean).join(' · '),
+    source: 'Spotify', embedUrl: `https://open.spotify.com/embed/album/${album.id}?theme=0`, embedHeight: 380, linkUrl: album.external_urls?.spotify || `https://open.spotify.com/album/${album.id}`,
     searchQuery: `${artists.split(', ')[0] || ''} ${String(album.name || '').replace(/\s*[\(\[].*$/, '')}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
   };
 }
@@ -399,7 +401,7 @@ function normalizeBook(work, shelf, index) {
     id: `book-${key}`, type: 'Livro', title: work.title, original: work.title, creator: authors.join(', '), year, rating: '',
     genre: shelf.genre, genres: [shelf.genre], runtime: 'Livro', poster, backdrop: poster,
     description: [authors.join(', '), year].filter(Boolean).join(' · ') || 'Descobre mais sobre este livro.',
-    searchQuery: `${work.title} ${authors[0] || ''}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
+    workKey: key, searchQuery: `${work.title} ${authors[0] || ''}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
   };
 }
 
@@ -501,7 +503,12 @@ async function loadLiveTv() {
       const base = 'https://iptv-org.github.io/api';
       const [channels, streams, logos, countries] = await Promise.all(['channels', 'streams', 'logos', 'countries'].map((name) => fetchPublicJson(`${base}/${name}.json`)));
       const logoByChannel = new Map();
-      for (const logo of logos) if (logo.channel && logo.url && logo.in_use !== false && !logoByChannel.has(logo.channel)) logoByChannel.set(logo.channel, logo.url);
+      for (const logo of logos) {
+        if (!logo.channel || !logo.url || logo.in_use === false) continue;
+        const list = logoByChannel.get(logo.channel) || [];
+        if (list.length < 3 && !list.includes(logo.url)) list.push(logo.url);
+        logoByChannel.set(logo.channel, list);
+      }
       const streamsByChannel = new Map();
       for (const stream of streams) {
         if (!stream.channel || !/^https?:/i.test(stream.url || '')) continue;
@@ -531,10 +538,12 @@ async function loadLiveTv() {
         usable.forEach((stream) => liveStreamMeta.set(stream.url, { referrer: stream.referrer || '', userAgent: stream.user_agent || '' }));
         const labels = (channel.categories?.length ? channel.categories : ['general']).map((id) => TV_CATEGORY_LABELS[id] || 'Outros');
         const info = countryInfo.get(channel.country);
-        const logo = logoByChannel.get(channel.id) || '';
+        const fallbackLogo = `https://raw.githubusercontent.com/LITUATUI/M3UPT/main/logos/${channel.id}.png`;
+        const ownLogos = logoByChannel.get(channel.id) || [];
+        const posters = channel.country === 'PT' ? [fallbackLogo, ...ownLogos] : [...ownLogos, fallbackLogo];
         const item = {
           id: `live-${channel.id}`, type: 'Canal', title: channel.name, original: channel.name, creator: info.name, year: '', rating: '',
-          genre: labels[0], genres: [...new Set(labels)], runtime: 'Ao vivo', poster: logo, backdrop: logo, description: `Canal de televisão · ${info.name}`, accent: '#b30d1b',
+          genre: labels[0], genres: [...new Set(labels)], runtime: 'Ao vivo', poster: posters[0], posters, backdrop: posters[0], description: `Canal de televisão · ${info.name}`, accent: '#b30d1b',
           streams: usable.map((stream) => ({ url: stream.url, quality: stream.quality || '' })),
         };
         if (!byCountry.has(channel.country)) byCountry.set(channel.country, []);
@@ -557,7 +566,7 @@ async function loadLiveTv() {
           const label = guessTvCategory(entry.name);
           list.push({
             id: `live-m3upt-${code}-${key}`, type: 'Canal', title: entry.name, original: entry.name, creator: countryInfo.get(code).name, year: '', rating: '',
-            genre: label, genres: [label], runtime: 'Ao vivo', poster: entry.logo, backdrop: entry.logo, description: `Canal de televisão · ${countryInfo.get(code).name}`, accent: '#b30d1b', streams: [stream],
+            genre: label, genres: [label], runtime: 'Ao vivo', poster: entry.logo, posters: entry.logo ? [entry.logo] : [], backdrop: entry.logo, description: `Canal de televisão · ${countryInfo.get(code).name}`, accent: '#b30d1b', streams: [stream],
           });
         }
       } catch { /* a lista complementar é opcional */ }
@@ -616,20 +625,30 @@ function adultVideoItem(sourceLabel, code, id, title, thumb, duration, views, em
   };
 }
 
-async function fetchRedtubeVideos({ ordering, period }, term) {
-  const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: '1', ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}) });
+const ADULT_ORIENTATIONS = {
+  straight: {},
+  gay: { rt: 'Gay', ph: 'gay', ep: '2' },
+  trans: { rt: 'Transgender', ph: 'transgender', ep: '0', epTerm: 'trans' },
+};
+
+async function fetchRedtubeVideos({ ordering, period }, term, orientation) {
+  const category = ADULT_ORIENTATIONS[orientation]?.rt;
+  const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: '1', ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://api.redtube.com/?${params}`);
   return (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
 }
 
-async function fetchPornhubVideos({ ordering, period }, term) {
-  const params = new URLSearchParams({ ordering, thumbsize: 'large', page: '1', ...(period ? { period } : {}), ...(term ? { search: term } : {}) });
+async function fetchPornhubVideos({ ordering, period }, term, orientation) {
+  const category = ADULT_ORIENTATIONS[orientation]?.ph;
+  const params = new URLSearchParams({ ordering, thumbsize: 'large', page: '1', ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
-  return (data.videos || []).map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
+  return (data.videos || []).filter((video) => orientation !== 'straight' || video.segment !== 'gay').map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
 }
 
-async function fetchEpornerVideos(order, term) {
-  const params = new URLSearchParams({ query: term || 'all', per_page: '30', page: '1', thumbsize: 'big', order, gay: '0', lq: '0', format: 'json' });
+async function fetchEpornerVideos(order, term, orientation) {
+  const config = ADULT_ORIENTATIONS[orientation] || {};
+  const query = [config.epTerm, term].filter(Boolean).join(' ') || 'all';
+  const params = new URLSearchParams({ query, per_page: '30', page: '1', thumbsize: 'big', order, gay: config.ep || '0', lq: '0', format: 'json' });
   const data = await fetchAdultJson(`https://www.eporner.com/api/v2/video/search/?${params}`);
   return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()))).filter((item) => item.poster && item.embedUrl);
 }
@@ -658,19 +677,119 @@ function interleaveAdult(lists, used, limit = 24) {
 
 async function fetchAdultVideos(value = {}) {
   const term = String(value.term || '').toLowerCase().trim();
+  const orientation = ADULT_ORIENTATIONS[value.orientation] ? value.orientation : 'straight';
   if (term && !/^[a-z0-9 -]{1,40}$/.test(term)) throw new Error('Categoria inválida.');
-  const cached = adultVideoCache.get(term);
+  const cacheKey = `${orientation}|${term}`;
+  const cached = adultVideoCache.get(cacheKey);
   if (cached && Date.now() - cached.at < DISCOVERY_TTL) return cached.rows;
   const specs = term ? ADULT_ROWS.slice(0, 2) : ADULT_ROWS;
   const fetched = await Promise.all(specs.map(async (spec) => {
-    const settled = await Promise.allSettled([fetchRedtubeVideos(spec.rt, term), fetchPornhubVideos(spec.ph, term), fetchEpornerVideos(spec.ep, term)]);
+    const settled = await Promise.allSettled([fetchRedtubeVideos(spec.rt, term, orientation), fetchPornhubVideos(spec.ph, term, orientation), fetchEpornerVideos(spec.ep, term, orientation)]);
     return { spec, lists: settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : [])) };
   }));
   const used = new Set();
   const rows = fetched.map(({ spec, lists }) => ({ eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(lists, used) }));
-  if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível contactar as fontes (RedTube, Pornhub e Eporner). Tenta novamente mais tarde.');
-  adultVideoCache.set(term, { at: Date.now(), rows });
+  if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível obter vídeos das fontes (RedTube, Pornhub e Eporner) para esta seleção. Tenta outra categoria.');
+  adultVideoCache.set(cacheKey, { at: Date.now(), rows });
   return rows;
+}
+
+// ---- Verificação das emissões (para esconder canais offline) ----
+const liveHealth = new Map();
+const liveProbeRuns = new Map();
+const LIVE_HEALTH_TTL = 15 * 60 * 1000;
+
+async function probeStream(stream) {
+  const meta = liveStreamMeta.get(stream.url) || {};
+  let origin = meta.origin || '';
+  if (!origin && meta.referrer) { try { origin = new URL(meta.referrer).origin; } catch { origin = ''; } }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(stream.url, { headers: { 'User-Agent': meta.userAgent || LIVE_UA, Accept: '*/*', ...(meta.referrer ? { Referer: meta.referrer } : {}), ...(origin ? { Origin: origin } : {}) }, signal: controller.signal });
+    if (!response.ok || !response.body) return false;
+    const reader = response.body.getReader();
+    const { value } = await reader.read();
+    reader.cancel().catch(() => {});
+    const head = Buffer.from(value || []).subarray(0, 16).toString('latin1');
+    return head.startsWith('#EXTM3U') || /video|mpegurl|mp2t/i.test(response.headers.get('content-type') || '');
+  } catch { return false; } finally { clearTimeout(timer); }
+}
+
+async function runLiveProbes(items, run) {
+  const queue = [...items];
+  const worker = async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      let best = '';
+      for (const stream of item.streams) { if (await probeStream(stream)) { best = stream.url; break; } }
+      liveHealth.set(item.id, { online: Boolean(best), best, at: Date.now() });
+      run.done += 1;
+    }
+  };
+  await Promise.all(Array.from({ length: 40 }, worker));
+  run.running = false;
+}
+
+async function fetchLiveHealth({ country } = {}) {
+  const code = String(country || '').toUpperCase();
+  const { byCountry } = await loadLiveTv();
+  const items = byCountry.get(code) || [];
+  const now = Date.now();
+  const stale = items.filter((item) => { const health = liveHealth.get(item.id); return !health || now - health.at > LIVE_HEALTH_TTL; }).slice(0, 600);
+  let run = liveProbeRuns.get(code);
+  if (stale.length && !run?.running) {
+    run = { running: true, done: 0, total: stale.length };
+    liveProbeRuns.set(code, run);
+    runLiveProbes(stale, run).catch(() => { run.running = false; });
+  }
+  const results = {};
+  items.forEach((item) => { const health = liveHealth.get(item.id); if (health) results[item.id] = { online: health.online, best: health.best }; });
+  return { running: Boolean(run?.running), done: run?.done || 0, total: run?.total || 0, results };
+}
+
+// ---- Onde ler um livro (Open Library e Project Gutenberg) e abertura segura de ligações ----
+const bookNorm = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+async function fetchBookSources(value = {}) {
+  const key = String(value.key || '').replace(/[^A-Za-z0-9]/g, '');
+  const title = String(value.title || '').slice(0, 200);
+  const author = String(value.author || '').slice(0, 120);
+  const out = { openLibrary: null, gutenberg: null };
+  await Promise.allSettled([
+    (async () => {
+      if (!key) return;
+      const data = await fetchPublicJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(`key:/works/${key}`)}&fields=key,ebook_access,ia&limit=1`);
+      const doc = data.docs?.[0];
+      out.openLibrary = { access: doc?.ebook_access || 'no_ebook', url: `https://openlibrary.org/works/${key}`, archiveUrl: doc?.ia?.[0] ? `https://archive.org/details/${doc.ia[0]}` : '' };
+    })(),
+    (async () => {
+      const data = await fetchPublicJson(`https://gutendex.com/books/?search=${encodeURIComponent([title, author].filter(Boolean).join(' '))}`);
+      const wanted = bookNorm(title);
+      const surname = bookNorm(author).split(' ').pop();
+      const match = (data.results || []).find((entry) => {
+        const candidate = bookNorm(entry.title);
+        const titleOk = wanted && (candidate.startsWith(wanted.slice(0, 18)) || wanted.startsWith(candidate.slice(0, 18)));
+        const authorOk = !surname || (entry.authors || []).some((person) => bookNorm(person.name).includes(surname));
+        return titleOk && authorOk;
+      });
+      if (match) {
+        const formats = match.formats || {};
+        out.gutenberg = { title: match.title, epub: formats['application/epub+zip'] || '', mobi: formats['application/x-mobipocket-ebook'] || '', html: formats['text/html'] || '', page: `https://www.gutenberg.org/ebooks/${match.id}` };
+      }
+    })(),
+  ]);
+  return out;
+}
+
+const LINK_HOSTS = ['gutenberg.org', 'archive.org', 'openlibrary.org', 'open.spotify.com', 'music.apple.com'];
+async function openAllowedLink(value = {}) {
+  let url;
+  try { url = new URL(String(value.url || '')); } catch { throw new Error('Endereço inválido.'); }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:' || !LINK_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) throw new Error('Este endereço não é permitido.');
+  await shell.openExternal(url.toString());
+  return { opened: true };
 }
 
 async function fetchDiscovery({ kind } = {}) {
@@ -1225,7 +1344,7 @@ function configureContentSecurityPolicy() {
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
-    "frame-src https://www.youtube-nocookie.com https://embed.redtube.com https://www.pornhub.com https://www.eporner.com",
+    "frame-src https://www.youtube-nocookie.com https://embed.redtube.com https://www.pornhub.com https://www.eporner.com https://open.spotify.com https://embed.music.apple.com",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",
@@ -1261,6 +1380,9 @@ function registerIpc() {
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
+  ipcMain.handle('tv:health', resultHandler(fetchLiveHealth));
+  ipcMain.handle('books:sources', resultHandler(fetchBookSources));
+  ipcMain.handle('app:open-link', resultHandler(openAllowedLink));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
-import { BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
+import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
@@ -527,7 +527,7 @@ function App() {
     let hls = null;
     let cancelled = false;
     let recovered = false;
-    const fail = () => { if (!cancelled) fallbackLiveToPipe().then((switched) => { if (!switched && !cancelled) setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.'); }); };
+    const fail = () => { if (!cancelled) fallbackLiveToPipe().then((switched) => { if (!switched && !cancelled && !tryNextLiveStream()) setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.'); }); };
     import('hls.js').then(({ default: Hls }) => {
       if (cancelled) return;
       if (!Hls.isSupported()) { fail(); return; }
@@ -545,7 +545,8 @@ function App() {
   }, [isPlayerOpen, playing?.url, playing?.hls]);
 
   const handleVideoError = async () => {
-    if (playing?.hls) { await fallbackLiveToPipe(); return; }
+    if (playing?.hls) { if (!(await fallbackLiveToPipe()) && !tryNextLiveStream()) setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.'); return; }
+    if (playing?.live && playing.piped && tryNextLiveStream()) return;
     if (playing?.direct && playing.sourceUrl && window.streamnexus?.isDesktop) {
       const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true });
       setPlaying((current) => (current ? { ...current, ...stream, direct: false } : current));
@@ -919,10 +920,15 @@ function App() {
   };
 
   const [adultCategory, setAdultCategory] = useState('Todos');
+  const [adultOrientation, setAdultOrientation] = useState(() => { try { return localStorage.getItem('streamnexus.adult.orientation') || 'straight'; } catch { return 'straight'; } });
+  const changeAdultOrientation = (value) => {
+    setAdultOrientation(value);
+    try { localStorage.setItem('streamnexus.adult.orientation', value); } catch { /* preferência só nesta sessão */ }
+  };
   const [adultVideos, setAdultVideos] = useState({ status: 'idle', rows: [], message: '' });
   const adultRequestRef = useRef(0);
 
-  const loadAdultVideos = useCallback(async (label) => {
+  const loadAdultVideos = useCallback(async (label, orientation) => {
     if (!window.streamnexus?.isDesktop) {
       setAdultVideos({ status: 'error', rows: [], message: 'Esta secção está disponível na app desktop.' });
       return;
@@ -931,7 +937,7 @@ function App() {
     setAdultVideos((current) => ({ ...current, status: 'loading', message: '' }));
     try {
       const term = ADULT_CATEGORIES.find((entry) => entry.label === label)?.term || '';
-      const rows = await window.streamnexus.fetchAdultVideos(term);
+      const rows = await window.streamnexus.fetchAdultVideos(term, orientation);
       if (requestId === adultRequestRef.current) setAdultVideos({ status: 'ready', rows, message: '' });
     } catch (error) {
       if (requestId === adultRequestRef.current) setAdultVideos({ status: 'error', rows: [], message: getError(error) });
@@ -939,13 +945,32 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos(adultCategory);
-  }, [activePage, adultEnabled, adultMode, adultCategory, loadAdultVideos]);
+    if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos(adultCategory, adultOrientation);
+  }, [activePage, adultEnabled, adultMode, adultCategory, adultOrientation, loadAdultVideos]);
 
   const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
   const [liveCountries, setLiveCountries] = useState([]);
   const [liveChannels, setLiveChannels] = useState({ status: 'idle', items: [], categories: [], message: '' });
   const liveRequestRef = useRef(0);
+  const [liveHealth, setLiveHealth] = useState({ results: {}, running: false, done: 0, total: 0 });
+  const [showOffline, setShowOffline] = useState(false);
+
+  useEffect(() => {
+    if (activePage !== 'tv' || tvMode !== 'channels' || liveChannels.status !== 'ready' || !window.streamnexus?.isDesktop) return undefined;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const data = await window.streamnexus.fetchLiveHealth(tvCountry);
+        if (cancelled) return;
+        setLiveHealth(data);
+        if (data.running) timer = window.setTimeout(poll, 3000);
+      } catch { /* sem verificação de emissões */ }
+    };
+    setLiveHealth({ results: {}, running: true, done: 0, total: 0 });
+    poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activePage, tvMode, tvCountry, liveChannels.status]);
 
   const loadLiveChannels = useCallback(async (country) => {
     if (!window.streamnexus?.isDesktop) {
@@ -999,6 +1024,14 @@ function App() {
     } catch { return false; }
   };
 
+  const tryNextLiveStream = () => {
+    if (!playing?.live) return false;
+    const { channel, index } = playing.live;
+    if (index + 1 >= (channel.streams?.length || 0)) return false;
+    playLiveChannel(channel, index + 1);
+    return true;
+  };
+
   const playLiveChannel = async (channel, streamIndex = 0) => {
     const stream = channel.streams?.[streamIndex];
     if (!stream) { notify('Este canal não tem emissões disponíveis.', 'error'); return; }
@@ -1015,6 +1048,7 @@ function App() {
   };
 
   const [booksView, setBooksView] = useState('dashboard');
+  const [bookSources, setBookSources] = useState({ id: '', status: 'idle', data: null });
   const showDiscover = activePage !== 'books' || booksView === 'discover';
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
@@ -1083,6 +1117,16 @@ function App() {
   };
 
   const selectedTitle = catalogTitles.find((item) => item.id === modal?.id) || discoveryLookup.find((item) => item.id === modal?.id) || Object.values(reading.shelf).map((entry) => entry.book).find((item) => item.id === modal?.id);
+  useEffect(() => {
+    if (modal?.type !== 'details' || selectedTitle?.type !== 'Livro' || !window.streamnexus?.isDesktop) return undefined;
+    const book = selectedTitle;
+    setBookSources({ id: book.id, status: 'loading', data: null });
+    let cancelled = false;
+    window.streamnexus.fetchBookSources({ key: book.workKey || book.id.replace(/^book-/, ''), title: book.title, author: (book.creator || '').split(',')[0] })
+      .then((data) => { if (!cancelled) setBookSources({ id: book.id, status: 'ready', data }); })
+      .catch(() => { if (!cancelled) setBookSources({ id: book.id, status: 'error', data: null }); });
+    return () => { cancelled = true; };
+  }, [modal?.type, modal?.id]);
   const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
   const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
@@ -1337,9 +1381,9 @@ function App() {
             </>}
           </section>
         ) : activePage === 'tv' && tvMode === 'channels' && !query ? (
-          <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
+          <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} health={liveHealth} showOffline={showOffline} onShowOffline={setShowOffline} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
-          <AdultVideosPage mode={adultMode} onMode={setAdultMode} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos(adultCategory)}/>
+          <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos(adultCategory, adultOrientation)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
             {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
@@ -1400,7 +1444,7 @@ function App() {
             <h2>{selectedTitle.title}</h2>
             <div className="detail-meta">{selectedTitle.rating && <><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i></>}<span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span></div>
             <p>{selectedTitle.description}</p>
-            <div className="detail-actions">{isVideoTitle(selectedTitle) && <button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button>}<button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button>{trailer.status === 'loading' && <button className="button button-glass" disabled><span className="spinner"></span>A procurar trailer…</button>}{trailer.status === 'ready' && <button className="button button-glass" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={16}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
+            <div className="detail-actions">{selectedTitle.type === 'Álbum' && selectedTitle.embedUrl && <button className="button button-primary" onClick={() => setModal({ type: 'embed', item: selectedTitle })}><Icon name="play" size={16}/>Ouvir agora</button>}{isVideoTitle(selectedTitle) && <button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button>}<button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button>{trailer.status === 'loading' && <button className="button button-glass" disabled><span className="spinner"></span>A procurar trailer…</button>}{trailer.status === 'ready' && <button className="button button-glass" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={16}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
             {selectedTitle.type === 'Livro' && (() => { const entry = reading.shelf[selectedTitle.id]; return <div className="reading-controls">
               <span className="eyebrow">A MINHA ESTANTE</span>
               <div className="reading-status">{Object.entries(READING_STATUS).map(([key, label]) => <button key={key} className={`button button-glass ${entry?.status === key ? 'is-active' : ''}`} onClick={() => setBookStatus(selectedTitle, key)}>{label}</button>)}</div>
@@ -1410,6 +1454,7 @@ function App() {
             {trailer.status === 'ready' && trailerPlaying && <div className="trailer-frame"><iframe title={`Trailer: ${selectedTitle.title}`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailer.key)}?autoplay=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
+            {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
           </div>
@@ -1419,8 +1464,8 @@ function App() {
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <span className="eyebrow">{modal.item.source?.toUpperCase()} · LEITOR INCORPORADO</span>
           <h2>{modal.item.title}</h2>
-          <div className="embed-frame"><iframe title={modal.item.title} src={modal.item.embedUrl} allow="autoplay; fullscreen; encrypted-media" allowFullScreen referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-presentation"/></div>
-          <small className="embed-note">Vídeo reproduzido a partir de {modal.item.source}. A StreamNexus não aloja nem descarrega este conteúdo.</small>
+          <div className="embed-frame" style={modal.item.embedHeight ? { aspectRatio: 'auto', height: modal.item.embedHeight } : undefined}><iframe title={modal.item.title} src={modal.item.embedUrl} allow="autoplay; fullscreen; encrypted-media" allowFullScreen referrerPolicy="no-referrer" sandbox={modal.item.embedHeight ? 'allow-scripts allow-same-origin allow-presentation allow-forms' : 'allow-scripts allow-same-origin allow-presentation'}/></div>
+          <small className="embed-note">{modal.item.embedHeight ? <>Pré-visualização de cerca de 30 s por faixa. Para ouvir completo, abre no {modal.item.source}. {modal.item.linkUrl && <button className="text-link" onClick={() => window.streamnexus?.openLink?.(modal.item.linkUrl)?.catch((error) => notify(getError(error), 'error'))}>Abrir no {modal.item.source}</button>}</> : <>Vídeo reproduzido a partir de {modal.item.source}. A StreamNexus não aloja nem descarrega este conteúdo.</>}</small>
         </div>}
 
         {modal.type === 'integrations' && <div className="integration-modal modal-card">

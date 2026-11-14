@@ -823,3 +823,17 @@ html, body { background: #070707; }
   .books-nav { grid-auto-flow: column; overflow-x: auto; }
   .rd-split { grid-template-columns: 1fr; }
 }
+
+
+/* Orientação, saúde dos canais e fontes fáceis */
+.live-controls-col { flex-direction: column; align-items: flex-end; }
+.live-health { display: flex; align-items: center; min-height: 22px; margin: -4px 0 10px; color: #8d8d95; font-size: 11px; }
+.live-health .spinner { width: 11px; height: 11px; margin-right: 6px; vertical-align: -2px; }
+.poster-card.is-offline { opacity: .42; filter: grayscale(.8); }
+.easy-sources { display: grid; gap: 10px; margin: 18px 0 4px; padding: 14px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; background: rgba(255,255,255,.04); }
+.easy-list { display: grid; gap: 8px; }
+.easy-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 7px; background: rgba(255,255,255,.04); }
+.easy-row > span { display: grid; gap: 3px; min-width: 0; }
+.easy-row strong { color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; }
+.easy-row small { color: #8d8d95; font-size: 11px; }
+.easy-row > div { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }

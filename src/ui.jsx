@@ -129,11 +129,13 @@ export function ScrollRow({ className = '', children, ...props }) {
 }
 
 export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave = false }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
+  const sources = item.posters?.length ? item.posters : [item.poster];
+  const [imageIndex, setImageIndex] = useState(0);
+  const imageFailed = imageIndex >= sources.length || !sources[imageIndex];
+  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} ${item.offline ? 'is-offline' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
     {rank && <span className="poster-rank">{rank}</span>}
     <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
-      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img src={item.poster} alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageFailed(true)}/>}
+      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img key={sources[imageIndex]} src={sources[imageIndex]} referrerPolicy="no-referrer" alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageIndex((current) => current + 1)}/>}
       <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
     </button>
     {!hideSave && <button className={`poster-save ${saved ? 'saved' : ''}`} aria-label={saved ? 'Remover da lista' : 'Adicionar à lista'} onClick={onSave}><Icon name={saved ? 'check' : 'plus'} size={15}/></button>}

@@ -7,20 +7,37 @@ export function TvModeTabs({ mode, onMode }) {
   </div>;
 }
 
-export function LiveTvPage({ mode, onMode, countries, country, onCountry, state, onPlay, onRetry }) {
+export function LiveTvPage({ mode, onMode, countries, country, onCountry, state, health, showOffline, onShowOffline, onPlay, onRetry }) {
   const [category, setCategory] = useState('Todos');
   const [filter, setFilter] = useState('');
   useEffect(() => { setCategory('Todos'); setFilter(''); }, [country]);
 
-  const items = state.items;
+  const decorated = useMemo(() => state.items.map((item) => {
+    const result = health?.results?.[item.id];
+    if (!result) return item;
+    const streams = result.best ? [...item.streams].sort((a, b) => (a.url === result.best ? -1 : b.url === result.best ? 1 : 0)) : item.streams;
+    return { ...item, streams, offline: result.online === false };
+  }), [state.items, health?.results]);
+  const offlineCount = decorated.filter((item) => item.offline).length;
+  const items = useMemo(() => {
+    const online = decorated.filter((item) => !item.offline);
+    return showOffline ? [...online, ...decorated.filter((item) => item.offline)] : online;
+  }, [decorated, showOffline]);
+  const categories = useMemo(() => {
+    const counts = new Map();
+    items.forEach((item) => item.genres.forEach((label) => counts.set(label, (counts.get(label) || 0) + 1)));
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count }));
+  }, [items]);
+  const activeCategory = category === 'Todos' || categories.some((entry) => entry.label === category) ? category : 'Todos';
+
   const term = filter.trim().toLowerCase();
-  const visible = useMemo(() => items.filter((item) => (category === 'Todos' || item.genres.includes(category)) && (!term || item.title.toLowerCase().includes(term))), [items, category, term]);
+  const visible = useMemo(() => items.filter((item) => (activeCategory === 'Todos' || item.genres.includes(activeCategory)) && (!term || item.title.toLowerCase().includes(term))), [items, activeCategory, term]);
   const sections = useMemo(() => {
-    if (category !== 'Todos' || term) return [];
+    if (activeCategory !== 'Todos' || term) return [];
     const groups = new Map();
     items.forEach((item) => { const key = item.genres[0]; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); });
     return [...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([label, list]) => ({ label, list }));
-  }, [items, category, term]);
+  }, [items, activeCategory, term]);
   const current = countries.find((entry) => entry.code === country);
 
   return <section className="live-tv page-in">
@@ -38,10 +55,14 @@ export function LiveTvPage({ mode, onMode, countries, country, onCountry, state,
       </div>
     </div>
 
-    {state.categories.length > 0 && <ScrollRow className="genre-chips" aria-label="Categorias de canais">
-      <button className={category === 'Todos' ? 'active' : ''} onClick={() => setCategory('Todos')}>Todos</button>
-      {state.categories.map(({ label, count }) => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(label)}>{label} <small>{count}</small></button>)}
+    {categories.length > 0 && <ScrollRow className="genre-chips" aria-label="Categorias de canais">
+      <button className={activeCategory === 'Todos' ? 'active' : ''} onClick={() => setCategory('Todos')}>Todos</button>
+      {categories.map(({ label, count }) => <button key={label} className={activeCategory === label ? 'active' : ''} onClick={() => setCategory(label)}>{label} <small>{count}</small></button>)}
     </ScrollRow>}
+
+    {state.status === 'ready' && <div className="live-health">
+      {health?.running ? <span><span className="spinner"></span> A verificar emissões… {health.done}/{health.total}</span> : offlineCount > 0 && <button className="text-link" onClick={() => onShowOffline(!showOffline)}>{showOffline ? 'Esconder' : 'Mostrar'} {offlineCount} {offlineCount === 1 ? 'canal offline' : 'canais offline'}</button>}
+    </div>}
 
     {state.status === 'loading' && items.length === 0 && <div className="empty-list catalog-empty"><span><span className="spinner"></span></span><strong>A carregar canais…</strong><p>Na primeira vez pode demorar alguns segundos.</p></div>}
     {state.status === 'error' && <div className="empty-list catalog-empty"><span><Icon name="alert" size={22}/></span><strong>Não foi possível carregar os canais</strong><p className="is-error-text">{state.message}</p><button className="text-link" onClick={onRetry}>Tentar novamente <Icon name="refresh" size={14}/></button></div>}
