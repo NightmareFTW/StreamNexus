@@ -2,17 +2,21 @@
 
 StreamNexus is an independent desktop media discovery app built with Electron, React, and Vite. It brings together a browsable movie and series catalog, torrent search through Prowlarr, a Real-Debrid library, and subtitle lookup through OpenSubtitles.
 
+## Download
+
+Grab the latest Windows installer from the [Releases page](https://github.com/NightmareFTW/StreamNexus/releases). The installer is not code-signed yet, so Windows SmartScreen may show a warning: choose **More info → Run anyway**.
+
 ## Features
 
-- Browse separate movie and series shelves for trending titles, new releases, and highly rated picks from TMDB.
-- Explore music and book collections, then load matching releases from Prowlarr.
-- Search configured Prowlarr indexers by category for movies, series, music, and books.
-- Open the profile menu for the personal list, Real-Debrid library, and settings.
-- Enable the adult content category in Settings. It is disabled by default.
-- Add Prowlarr torrent results to a Real-Debrid account.
-- View Real-Debrid torrents, check their status, and play ready files in the built-in player.
-- Search OpenSubtitles for Portuguese subtitles. Portugal Portuguese is preferred, with Brazilian Portuguese available as an alternative.
-- Save titles to a personal list.
+- **Movies, series and TV shows** from TMDB, with shelves that keep loading as you scroll and genre grids with infinite scroll.
+- **Live TV channels by country**, from public IPTV lists, with direct playback and automatic hiding of offline channels.
+- **Music** discovery (iTunes, optionally Spotify), with embedded previews and free full-length tracks from the Internet Archive and Audius.
+- **Books** discovery from Open Library, a personal reading shelf (dashboard, stats, history and achievements) and free legal sources: Project Gutenberg, Internet Archive and LibriVox.
+- **Adult tab (disabled by default)**: videos from the public APIs of RedTube, Pornhub and Eporner, played in each site's embedded player, plus adult cinema from TMDB. Only enable it if you are of legal age in your country.
+- **Prowlarr + Real-Debrid**: search indexers by category, add results to your Real-Debrid account and play ready files.
+- **Built-in player**: direct play when the file is compatible, FFmpeg conversion otherwise, automatic resume, seeking, a quality menu (original, 1080p, 720p) and a prompt when the connection is slow.
+- **Subtitles** from OpenSubtitles, with Portugal Portuguese listed first.
+- Personal list and start-up scripts (`StreamNexus.bat` and `StreamNexus.vbs`, the latter without a console window).
 
 ## Requirements
 
@@ -73,7 +77,9 @@ Enter an OpenSubtitles.com API key, username, and password. Test the connection 
 
 On desktop, API keys and service credentials are stored in Electron's encrypted application storage. Real-Debrid authorization is stored separately. The Vite browser preview uses session storage and does not provide the same desktop credential storage.
 
-TMDB attribution is available in the Credits section under Settings. StreamNexus is an independent project and is not affiliated with TMDB, Real-Debrid, Prowlarr, or OpenSubtitles.
+TMDB attribution is available in the Credits section under Settings. StreamNexus is an independent project and is not affiliated with TMDB, Real-Debrid, Prowlarr, OpenSubtitles, Spotify, Apple, the Internet Archive, Open Library, Project Gutenberg, LibriVox, Audius, iptv-org or any of the video sites above.
+
+StreamNexus does not host or distribute media. It lists metadata from public services, embeds their own players and connects to the services you configure. You are responsible for the content you access and for complying with the laws and terms of service that apply to you.
 
 ## Project commands
 
