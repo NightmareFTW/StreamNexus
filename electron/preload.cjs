@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   testProwlarr: (value) => invokeRequest('prowlarr:test', value),
   addReleaseToRealDebrid: (value) => invokeRequest('prowlarr:add-release', value),
   fetchCatalog: () => invokeRequest('tmdb:catalog'),
+  fetchDiscovery: (kind) => invokeRequest('discovery:fetch', { kind }),
+  testSpotify: (value) => invokeRequest('spotify:test', value),
   fetchTrailer: (value) => invokeRequest('tmdb:trailer', value),
   openExternalPlayer: (url) => invokeRequest('player:external', url),
   prepareAudioStream: (url, options = {}) => invokeRequest('player:prepare-audio', { url, transcodeVideo: Boolean(options.transcodeVideo) }),

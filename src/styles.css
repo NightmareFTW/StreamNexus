@@ -630,3 +630,27 @@ html, body { background: #070707; }
 .status-bar.is-error { border-top-color: rgba(234,161,95,.45); }
 .main-content { padding-bottom: 44px; }
 @media (max-width: 900px) { .status-bar { left: 0; padding: 8px 16px; } }
+
+/* Pesquisa alinhada com as abas na barra de topo; trailer junto aos botões */
+.sidebar-search { flex: 0 0 auto; width: clamp(160px, 17vw, 250px); height: 36px; margin: 0 clamp(12px, 2vw, 28px) 0 0; }
+.trailer-frame { margin: 16px 0 0; }
+.detail-actions { flex-wrap: wrap; }
+
+/* Mensagens: erro a vermelho, sucesso a verde */
+.integration-test-line .is-success { color: #6fdc9a; }
+.integration-test-line .is-error { color: #ff6b6b; }
+.integration-test-line .is-info { color: #a9aab4; }
+.toast.is-success { border-color: rgba(111,220,154,.35); }
+.toast.is-success .toast-check { color: #6fdc9a; background: rgba(111,220,154,.14); }
+.toast.is-error { border-color: rgba(255,107,107,.45); color: #ffd6d6; background: rgba(58,20,22,.97); }
+.toast.is-error .toast-check { color: #ff6b6b; background: rgba(255,107,107,.16); }
+.toast.is-info .toast-check { color: #b9bac4; background: rgba(255,255,255,.08); }
+.inline-error, .subtitle-message.is-error, .is-error-text { color: #ff8a8a; }
+.subtitle-message.is-ready { color: #6fdc9a; }
+
+/* TV, música e livros: capas quadradas/verticais e hero com capa */
+.poster-card.poster-music .poster-image { aspect-ratio: 1; }
+.poster-card.poster-book .poster-image { aspect-ratio: 2/3; }
+.poster-card.poster-music .poster-image img, .poster-card.poster-book .poster-image img { object-fit: cover; }
+.poster-sub > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero.hero-art { background-color: #0b0b10; background-repeat: no-repeat; background-size: 100% 100%, 100% 100%, auto 118%; background-position: 0 0, 0 0, right clamp(40px, 8vw, 140px) center; }

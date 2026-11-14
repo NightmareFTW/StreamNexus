@@ -27,6 +27,11 @@ function matchesTorrentTitle(torrent, title) {
   });
 }
 
+const isVideoTitle = (title) => !['Álbum', 'Livro'].includes(title?.type);
+const titleCategory = (title) => (title?.type === 'Álbum' ? 'music' : title?.type === 'Livro' ? 'books' : title?.type === 'Série' ? 'series' : 'movies');
+const DISCOVERY_PAGES = ['tv', 'music', 'books'];
+const DISCOVERY_LABELS = { tv: 'programas de TV', music: 'álbuns', books: 'livros' };
+
 const VIDEO_FILE_PATTERN = /\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|wmv|mpe?g)$/i;
 
 // O Real-Debrid devolve um link por ficheiro selecionado, pela mesma ordem de `files`.
@@ -264,19 +269,22 @@ function App() {
   const browseVisitRef = useRef(0);
   const releaseRequestRef = useRef(0);
   const [notice, setNotice] = useState('');
+  const [noticeKind, setNoticeKind] = useState('success');
   const [session, setSession] = useState(readSession);
   const [rdUser, setRdUser] = useState(null);
   const [rdItems, setRdItems] = useState([]);
   const [rdSearch, setRdSearch] = useState(null);
   const [releaseSearch, setReleaseSearch] = useState(null);
   const [releaseBusyId, setReleaseBusyId] = useState('');
-  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
-  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
-  const [integrationTest, setIntegrationTest] = useState('');
+  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info' });
+  const setIntegrationTest = useCallback((text, kind = 'info') => setIntegrationTestState({ text, kind }), []);
   const [catalogTitles, setCatalogTitles] = useState(titles);
   const [catalogRows, setCatalogRows] = useState(null);
   const [catalogStatus, setCatalogStatus] = useState('sample');
   const [catalogUpdated, setCatalogUpdated] = useState('');
+  const [discovery, setDiscovery] = useState({});
   const [heroIndex, setHeroIndex] = useState(0);
   const [subtitleResults, setSubtitleResults] = useState([]);
   const [subtitleStatus, setSubtitleStatus] = useState('idle');
@@ -319,8 +327,9 @@ function App() {
   const [playing, setPlaying] = useState(null);
   const [visibleCount, setVisibleCount] = useState(24);
 
-  const notify = useCallback((message) => {
+  const notify = useCallback((message, kind = 'success') => {
     setNotice(message);
+    setNoticeKind(kind);
     window.clearTimeout(notify.timer);
     notify.timer = window.setTimeout(() => setNotice(''), 3600);
   }, []);
@@ -381,7 +390,7 @@ function App() {
       setCatalogStatus('ready');
     } catch (error) {
       setCatalogStatus('error');
-      notify(getError(error));
+      notify(getError(error), 'error');
     }
   };
 
@@ -390,14 +399,42 @@ function App() {
     refreshCatalog();
   }, [integrationSettings.tmdbApiKey]);
 
-  const featuredTitles = activePage === 'films'
+  const loadDiscovery = useCallback(async (kind) => {
+    if (!window.streamnexus?.isDesktop) {
+      setDiscovery((current) => ({ ...current, [kind]: { status: 'error', rows: [], message: 'Esta secção está disponível na app desktop.' } }));
+      return;
+    }
+    setDiscovery((current) => ({ ...current, [kind]: { status: 'loading', rows: current[kind]?.rows || [] } }));
+    try {
+      const rows = await window.streamnexus.fetchDiscovery(kind);
+      setDiscovery((current) => ({ ...current, [kind]: { status: 'ready', rows } }));
+    } catch (error) {
+      setDiscovery((current) => ({ ...current, [kind]: { status: 'error', rows: [], message: getError(error) } }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!DISCOVERY_PAGES.includes(activePage)) return;
+    const current = discovery[activePage];
+    if (current && current.status !== 'error') return;
+    if (activePage === 'tv' && !integrationSettings.tmdbApiKey) return;
+    loadDiscovery(activePage);
+  }, [activePage, integrationSettings.tmdbApiKey]);
+
+  const discoveryLookup = useMemo(() => Object.values(discovery).flatMap((entry) => (entry.rows || []).flatMap((row) => row.items)), [discovery]);
+  const discoveryPage = DISCOVERY_PAGES.includes(activePage);
+  const discoveryState = discovery[activePage];
+  const discoveryShelves = discoveryPage ? (discoveryState?.rows || []) : [];
+  const discoveryItems = [...new Map(discoveryShelves.flatMap((row) => row.items).filter((item) => item.poster).map((item) => [item.id, item])).values()];
+
+  const featuredTitles = discoveryPage ? discoveryItems.slice(0, 10) : activePage === 'films'
     ? (catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme'))
     : activePage === 'series'
       ? (catalogRows?.popularSeries?.length ? catalogRows.popularSeries : catalogTitles.filter((item) => item.type === 'Série'))
       : (catalogRows?.trending?.length ? catalogRows.trending : catalogTitles);
   const featuredTitle = featuredTitles[heroIndex % Math.max(featuredTitles.length, 1)] || titles[0];
   useEffect(() => {
-    if (!['home', 'films', 'series'].includes(activePage) || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
+    if (!['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
     const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % featuredTitles.length), 8500);
     return () => window.clearInterval(timer);
   }, [activePage, featuredTitles.length, query, genre]);
@@ -628,7 +665,7 @@ function App() {
     if (window.streamnexus?.isDesktop) {
       window.streamnexus.loadIntegrations()
         .then((settings) => { setIntegrationSettings(settings); setIntegrationForm(settings); })
-        .catch((error) => setIntegrationTest(getError(error)));
+        .catch((error) => setIntegrationTest(getError(error), 'error'));
       return;
     }
     try {
@@ -771,7 +808,7 @@ function App() {
   const selectTorrentFiles = async (id) => {
     try {
       const details = await callRd(`/torrents/info/${encodeURIComponent(id)}`);
-      if (!details.files?.length) { notify('Os ficheiros ainda estão a ser preparados. Tenta novamente dentro de instantes.'); return; }
+      if (!details.files?.length) { notify('Os ficheiros ainda estão a ser preparados. Tenta novamente dentro de instantes.', 'info'); return; }
       await callRd(`/torrents/selectFiles/${encodeURIComponent(id)}`, { method: 'POST', body: { files: 'all' } });
       await loadRdAccount();
       notify('Ficheiros selecionados. O Real-Debrid está a preparar o conteúdo.');
@@ -864,8 +901,8 @@ function App() {
       setPlaying({ title: title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
       setModal({ type: 'player' });
       findSubtitles(title, fileName);
-      if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.');
-    } catch (error) { setRdError(getError(error)); notify(getError(error)); }
+      if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.', 'info');
+    } catch (error) { setRdError(getError(error)); notify(getError(error), 'error'); }
   };
 
   const selectEmbeddedSubtitle = (track) => {
@@ -886,7 +923,7 @@ function App() {
   };
 
   const searchResults = useMemo(() => {
-    let result = catalogTitles;
+    let result = activePage === 'watchlist' ? [...new Map([...catalogTitles, ...discoveryLookup].map((item) => [item.id, item])).values()] : catalogTitles;
     if (activePage === 'films') result = result.filter((item) => item.type === 'Filme');
     if (activePage === 'series') result = result.filter((item) => item.type === 'Série');
     if (activePage === 'watchlist') result = result.filter((item) => saved.includes(item.id));
@@ -896,7 +933,7 @@ function App() {
     }
     if (genre !== 'Todos') result = result.filter((item) => item.genre === genre || item.genres?.includes(genre));
     return result;
-  }, [activePage, catalogTitles, genre, query, saved]);
+  }, [activePage, catalogTitles, discoveryLookup, genre, query, saved]);
 
   useEffect(() => { setVisibleCount(24); }, [activePage, genre, query]);
 
@@ -916,13 +953,15 @@ function App() {
     }
   };
 
-  const selectedTitle = catalogTitles.find((item) => item.id === modal?.id);
+  const selectedTitle = catalogTitles.find((item) => item.id === modal?.id) || discoveryLookup.find((item) => item.id === modal?.id);
   const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
-  const genreTitles = activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
+  const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
   const browseGenres = [...new Set(genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-PT'));
   const readyTorrents = rdItems.filter((item) => item.status === 'downloaded');
-  const browsingShelves = activePage === 'films'
+  const browsingShelves = discoveryPage
+    ? makeDistinctShelves(discoveryShelves.map((row) => ({ ...row, page: activePage })), [featuredTitle.id])
+    : activePage === 'films'
     ? makeDistinctShelves([
       { eyebrow: 'EM ALTA', title: 'Filmes populares', items: catalogRows?.trending?.filter((item) => item.type === 'Filme')?.length ? catalogRows.trending.filter((item) => item.type === 'Filme') : catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme'), page: 'films' },
         { eyebrow: 'TENDÊNCIAS', title: 'Populares no StreamNexus', items: catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme').slice().reverse(), page: 'films' },
@@ -996,7 +1035,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!['tv', 'music', 'books', 'adult'].includes(activePage) || (activePage === 'adult' && !adultEnabled)) return;
+    if (activePage !== 'adult' || !adultEnabled) return;
     const categoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
     if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey || (releaseSearch?.categoryKey === categoryKey && releaseSearch?.collectionTitle && releaseSearch.status !== 'error')) return;
     if (lastBrowsePageRef.current !== activePage) {
@@ -1019,6 +1058,8 @@ function App() {
         prowlarrUrl: integrationForm.prowlarrUrl.trim().replace(/\/+$/, ''),
         prowlarrApiKey: integrationForm.prowlarrApiKey.trim(),
         tmdbApiKey: integrationForm.tmdbApiKey.trim(),
+        spotifyClientId: (integrationForm.spotifyClientId || '').trim(),
+        spotifyClientSecret: (integrationForm.spotifyClientSecret || '').trim(),
         openSubtitlesApiKey: integrationForm.openSubtitlesApiKey.trim(),
         openSubtitlesUsername: integrationForm.openSubtitlesUsername.trim(),
       };
@@ -1026,9 +1067,9 @@ function App() {
       else sessionStorage.setItem('streamnexus.integrations', JSON.stringify(next));
       setIntegrationSettings(next);
       setIntegrationForm(next);
-      setIntegrationTest('Configuração guardada.');
+      setIntegrationTest('Configuração guardada.', 'success');
       notify('Prowlarr configurado.');
-    } catch (error) { setIntegrationTest(getError(error)); }
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
   const testProwlarr = async () => {
@@ -1042,8 +1083,8 @@ function App() {
         const response = await fetch(`${base}/api/v1/system/status`, { headers: { 'X-Api-Key': integrationForm.prowlarrApiKey.trim() } });
         if (!response.ok) throw new Error(`Prowlarr respondeu com erro ${response.status}.`);
       }
-      setIntegrationTest('Ligação concluída. Prowlarr está acessível.');
-    } catch (error) { setIntegrationTest(getError(error)); }
+      setIntegrationTest('Ligação concluída. Prowlarr está acessível.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
   const testTmdb = async () => {
@@ -1052,8 +1093,19 @@ function App() {
       if (!integrationForm.tmdbApiKey.trim()) throw new Error('Preenche a API key do TMDB.');
       if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
       await window.streamnexus.testTmdb({ tmdbApiKey: integrationForm.tmdbApiKey.trim() });
-      setIntegrationTest('TMDB ligado. O catálogo será atualizado ao guardar.');
-    } catch (error) { setIntegrationTest(getError(error)); }
+      setIntegrationTest('TMDB ligado. O catálogo será atualizado ao guardar.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+  };
+
+  const testSpotify = async () => {
+    setIntegrationTest('A testar Spotify…');
+    try {
+      const credentials = { spotifyClientId: (integrationForm.spotifyClientId || '').trim(), spotifyClientSecret: (integrationForm.spotifyClientSecret || '').trim() };
+      if (!credentials.spotifyClientId || !credentials.spotifyClientSecret) throw new Error('Preenche o Client ID e o Client Secret do Spotify.');
+      if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
+      await window.streamnexus.testSpotify(credentials);
+      setIntegrationTest('Spotify ligado. A aba Música passa a usar o catálogo do Spotify.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
   const testOpenSubtitles = async () => {
@@ -1067,8 +1119,8 @@ function App() {
       if (Object.values(credentials).some((value) => !value)) throw new Error('Preenche a API key, o utilizador e a palavra-passe do OpenSubtitles.');
       if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
       await window.streamnexus.testOpenSubtitles(credentials);
-      setIntegrationTest('OpenSubtitles ligado. As legendas PT-PT aparecem primeiro no leitor.');
-    } catch (error) { setIntegrationTest(getError(error)); }
+      setIntegrationTest('OpenSubtitles ligado. As legendas PT-PT aparecem primeiro no leitor.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
   const grabRelease = async (release) => {
@@ -1084,9 +1136,9 @@ function App() {
         throw new Error('Para adicionar links de indexadores diretamente, abre a app desktop StreamNexus.');
       }
       notify('Lançamento enviado para a tua conta Real-Debrid.');
-      if (modal?.type === 'details') await searchTitleInLibrary(catalogTitles.find((item) => item.id === modal.id));
+      if (modal?.type === 'details') await searchTitleInLibrary([...catalogTitles, ...discoveryLookup].find((item) => item.id === modal.id));
       else await loadRdAccount();
-    } catch (error) { notify(getError(error)); }
+    } catch (error) { notify(getError(error), 'error'); }
     finally { setReleaseBusyId(''); }
   };
 
@@ -1095,7 +1147,7 @@ function App() {
     setTrailer({ status: 'loading', key: '', name: '' });
     setTrailerPlaying(false);
     const requestId = ++trailerRequestRef.current;
-    if (!window.streamnexus?.isDesktop || !integrationSettings.tmdbApiKey) {
+    if (!window.streamnexus?.isDesktop || !integrationSettings.tmdbApiKey || !isVideoTitle(title)) {
       setTrailer({ status: 'unavailable', key: '', name: '' });
     } else {
       window.streamnexus.fetchTrailer({ id: title.tmdbId, type: title.tmdbType || (title.type === 'Série' ? 'tv' : 'movie'), title: title.original || title.title, year: title.year })
@@ -1105,7 +1157,7 @@ function App() {
         .catch(() => { if (requestId === trailerRequestRef.current) setTrailer({ status: 'error', key: '', name: '' }); });
     }
     searchTitleInLibrary(title);
-    searchReleaseSources(title.original || title.title, title.type === 'Série' ? 'series' : 'movies', title.id);
+    searchReleaseSources(title.searchQuery || title.original || title.title, titleCategory(title), title.id);
   };
   const startPlayback = (title) => {
     if (!session?.access_token) { setModal({ type: 'connect' }); return; }
@@ -1124,7 +1176,7 @@ function App() {
 
         <form className="sidebar-search" role="search" onSubmit={(event) => event.preventDefault()}>
           <Icon name="search" size={15}/>
-          <input type="search" aria-label="Pesquisar no catálogo" placeholder="Pesquisar filmes e séries" value={query} onChange={(event) => { setQuery(event.target.value); if (!['home', 'films', 'series', 'watchlist'].includes(activePage)) setActivePage('home'); setProfileMenuOpen(false); }}/>
+          <input type="search" aria-label="Pesquisar no catálogo" placeholder="Pesquisar títulos" value={query} onChange={(event) => { setQuery(event.target.value); if (!['home', 'films', 'series', 'watchlist'].includes(activePage)) setActivePage('home'); setProfileMenuOpen(false); }}/>
         </form>
         <div className="side-section">
           <nav className="side-nav" aria-label="Navegação principal">
@@ -1170,19 +1222,24 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
-        ) : ['home', 'films', 'series'].includes(activePage) && !query ? (
+        ) : ['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
-            {genre === 'Todos' && <section className="hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
-              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'} {featuredTitle.type.toUpperCase()}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta"><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i><span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}><Icon name="play" size={17}/>Ver agora</button><button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button><button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
+            {genre === 'Todos' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
+              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : activePage === 'tv' ? 'PROGRAMAS EM DESTAQUE' : activePage === 'music' ? 'ÁLBUNS EM DESTAQUE' : activePage === 'books' ? 'LIVROS EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'}{activePage === 'home' && ` ${featuredTitle.type.toUpperCase()}`}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.creator || featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta">{featuredTitle.rating && <><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i></>}<span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}>{isVideoTitle(featuredTitle) ? <Icon name="play" size={17}/> : <Icon name="spark" size={17}/>}{isVideoTitle(featuredTitle) ? 'Ver agora' : 'Ver detalhes'}</button>{isVideoTitle(featuredTitle) && <button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button>}<button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>}
 
             {activePage !== 'home' && <div className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</div>}
 
+            {discoveryPage && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (activePage !== 'tv' || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
+              {activePage === 'tv' && !integrationSettings.tmdbApiKey ? <><strong>Liga o TMDB para ver programas de TV</strong><p>Adiciona a API key do TMDB nas definições para carregar programas, reality, documentários e muito mais.</p><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar TMDB <Icon name="chevron" size={14}/></button></>
+                : discoveryState?.status === 'error' ? <><strong>Não foi possível carregar {DISCOVERY_LABELS[activePage]}</strong><p className="is-error-text">{discoveryState.message}</p><button className="text-link" onClick={() => loadDiscovery(activePage)}>Tentar novamente <Icon name="refresh" size={14}/></button></>
+                  : <><strong>A carregar {DISCOVERY_LABELS[activePage]}…</strong><p>A reunir os títulos em destaque.</p></>}
+            </div>}
             {genre !== 'Todos' && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
             {visibleBrowsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
-              <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls"><button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button><div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
+              <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls">{shelf.page !== activePage && <button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button>}<div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
               <div className={`poster-row ${shelf.ranked ? 'ranked-row' : ''}`}>{shelf.items.map((item, index) => <PosterCard key={item.id} item={item} index={index} rank={shelf.ranked ? index + 1 : null} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>
             </section>)}
 
@@ -1208,7 +1265,7 @@ function App() {
 
       <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-      {notice && !isPlayerOpen && <div className="toast"><span className="toast-check"><Icon name="check" size={14}/></span>{notice}</div>}
+      {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
         {modal.type === 'details' && selectedTitle && <div className="detail-modal modal-card">
@@ -1217,20 +1274,13 @@ function App() {
           <div className="detail-content">
             <span className="eyebrow"><span className="pulse-dot"></span>{selectedTitle.type.toUpperCase()} · {selectedTitle.year}</span>
             <h2>{selectedTitle.title}</h2>
-            <div className="detail-meta"><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i><span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span><span className="quality-tag">4K UHD</span></div>
+            <div className="detail-meta">{selectedTitle.rating && <><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i></>}<span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span></div>
             <p>{selectedTitle.description}</p>
-            <div className="detail-actions"><button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button><button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button></div>
+            <div className="detail-actions">{isVideoTitle(selectedTitle) && <button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button>}<button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button>{trailer.status === 'loading' && <button className="button button-glass" disabled><span className="spinner"></span>A procurar trailer…</button>}{trailer.status === 'ready' && <button className="button button-glass" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={16}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
+            {trailer.status === 'ready' && trailerPlaying && <div className="trailer-frame"><iframe title={`Trailer: ${selectedTitle.title}`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailer.key)}?autoplay=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}
             <div className="detail-divider"></div>
-            <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span><span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span></div>
-            <section className="trailer-panel">
-              <div className="trailer-heading"><div><span className="eyebrow">MAIS INFORMAÇÕES</span><strong>Trailer</strong></div>{trailer.status === 'ready' && <button className="button button-quiet button-sm" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={13}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
-              {trailer.status === 'loading' && <p className="trailer-message">A procurar o trailer…</p>}
-              {trailer.status === 'ready' && <><p className="trailer-message">{trailer.name}</p>{trailerPlaying && <div className="trailer-frame"><iframe title={`Trailer: ${selectedTitle.title}`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailer.key)}?autoplay=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}</>}
-              {trailer.status === 'empty' && <p className="trailer-message">Não encontrámos um trailer oficial no TMDB.</p>}
-              {trailer.status === 'unavailable' && <p className="trailer-message">Liga o catálogo TMDB para carregar trailers deste título.</p>}
-              {trailer.status === 'error' && <p className="trailer-message">Não foi possível carregar o trailer neste momento.</p>}
-            </section>
-            <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.original || selectedTitle.title, selectedTitle.type === 'Série' ? 'series' : 'movies', selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
+            <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
+            <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
           </div>
         </div>}
@@ -1250,6 +1300,12 @@ function App() {
             <label className="input-label" htmlFor="tmdb-key">API key do TMDB</label><input id="tmdb-key" className="text-input" type="password" autoComplete="off" placeholder="API Read Access Token" value={integrationForm.tmdbApiKey || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, tmdbApiKey: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testTmdb}>Testar TMDB</button>
 
+            <div className="integration-group-title">Spotify (opcional)</div>
+            <small className="integration-help">Cria uma app em developer.spotify.com e cola aqui o Client ID e o Client Secret. Melhora a aba Música; sem isto é usado o iTunes.</small>
+            <label className="input-label" htmlFor="spotify-id">Client ID</label><input id="spotify-id" className="text-input" autoComplete="off" placeholder="Client ID do Spotify" value={integrationForm.spotifyClientId || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientId: event.target.value }))}/>
+            <label className="input-label" htmlFor="spotify-secret">Client Secret</label><input id="spotify-secret" className="text-input" type="password" autoComplete="off" placeholder="Client Secret do Spotify" value={integrationForm.spotifyClientSecret || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientSecret: event.target.value }))}/>
+            <button type="button" className="button button-quiet integration-test-button" onClick={testSpotify}>Testar Spotify</button>
+
             <div className="integration-group-title">OpenSubtitles</div>
             <small className="integration-help">A API key e as credenciais da conta OpenSubtitles são necessárias para pesquisar e descarregar legendas.</small>
             <label className="input-label" htmlFor="opensubtitles-key">API key</label><input id="opensubtitles-key" className="text-input" type="password" autoComplete="off" placeholder="API key do OpenSubtitles" value={integrationForm.openSubtitlesApiKey || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, openSubtitlesApiKey: event.target.value }))}/>
@@ -1257,7 +1313,7 @@ function App() {
             <label className="input-label" htmlFor="opensubtitles-password">Palavra-passe</label><input id="opensubtitles-password" className="text-input" type="password" autoComplete="new-password" placeholder="Palavra-passe da conta" value={integrationForm.openSubtitlesPassword || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, openSubtitlesPassword: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testOpenSubtitles}>Testar OpenSubtitles</button>
 
-            <div className="integration-test-line">{integrationTest && <span className={/erro|não|inválid|failed|error|não foi/i.test(integrationTest) ? 'is-error' : ''}>{integrationTest}</span>}</div>
+            <div className="integration-test-line">{integrationTestState.text && <span className={`is-${integrationTestState.kind}`}>{integrationTestState.text}</span>}</div>
             <div className="integration-actions"><span className="integration-help">As chaves são cifradas na app desktop.</span><button className="button button-primary"><Icon name="check" size={15}/>Guardar</button></div>
           </form>
           <div className="adult-setting"><span><strong>Pesquisa de conteúdo adulto</strong><small>Ativa a categoria Adulto (Whisparr) no menu e nas pesquisas.</small></span><input type="checkbox" checked={adultEnabled} onChange={(event) => toggleAdultSearch(event.target.checked)} aria-label="Ativar pesquisa de conteúdo adulto"/></div>
@@ -1323,14 +1379,14 @@ function App() {
 
 function PosterCard({ item, index, saved, onOpen, onSave, rank }) {
   const [imageFailed, setImageFailed] = useState(false);
-  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
+  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} poster-${item.type === 'Álbum' ? 'music' : item.type === 'Livro' ? 'book' : 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
     {rank && <span className="poster-rank">{rank}</span>}
     <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
-      {imageFailed ? <span className="poster-fallback"><i>{item.type === 'Série' ? 'SÉRIE' : 'FILME'}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img src={item.poster} alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageFailed(true)}/>}
+      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img src={item.poster} alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageFailed(true)}/>}
       <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
     </button>
     <button className={`poster-save ${saved ? 'saved' : ''}`} aria-label={saved ? 'Remover da lista' : 'Adicionar à lista'} onClick={onSave}><Icon name={saved ? 'check' : 'plus'} size={15}/></button>
-    <button className="poster-title" onClick={onOpen}>{item.title}</button><div className="poster-sub"><span>{item.year} <i>·</i> {item.genre}</span><span className="poster-rating">★ {item.rating}</span></div>
+    <button className="poster-title" onClick={onOpen}>{item.title}</button><div className="poster-sub"><span>{item.creator ? item.creator : <>{item.year} <i>·</i> {item.genre}</>}</span>{item.rating && <span className="poster-rating">★ {item.rating}</span>}</div>
   </article>;
 }
 
@@ -1362,11 +1418,11 @@ function ReleaseSearchResults({ search, categoryKey, connected, busyId, onAdd })
 }
 
 function ReleaseSearchPanel({ title, search, connected, busyId, configured, onRefresh, onConfigure, onAdd }) {
-  const categoryKey = title.type === 'Série' ? 'series' : 'movies';
+  const categoryKey = titleCategory(title);
   const current = search?.titleId === title.id ? search : null;
   return <section className="release-panel">
     <div className="release-panel-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> PESQUISA NOS INDEXADORES</span><strong>{SEARCH_CATEGORIES[categoryKey].manager} · enviar ao Real-Debrid</strong></div><div>{configured && <button className="rd-search-refresh" onClick={onRefresh} disabled={current?.status === 'loading'} aria-label="Pesquisar novamente"><Icon name="refresh" size={15}/></button>}<button className="rd-search-refresh" onClick={onConfigure} aria-label="Configurar Prowlarr"><Icon name="settings" size={15}/></button></div></div>
-    {!configured ? <div className="release-results-state"><p>Configura o Prowlarr para procurar lançamentos e magnets para este título.</p><button className="text-link" onClick={onConfigure}>Configurar fontes <Icon name="chevron" size={14}/></button></div> : !current || current.status === 'loading' ? <div className="release-results-state"><span className="spinner"></span><p>A pesquisar “{title.original || title.title}” no Prowlarr…</p></div> : <ReleaseSearchResults search={current} categoryKey={categoryKey} connected={connected} busyId={busyId} onAdd={onAdd}/>}
+    {!configured ? <div className="release-results-state"><p>Configura o Prowlarr para procurar lançamentos e magnets para este título.</p><button className="text-link" onClick={onConfigure}>Configurar fontes <Icon name="chevron" size={14}/></button></div> : !current || current.status === 'loading' ? <div className="release-results-state"><span className="spinner"></span><p>A pesquisar “{title.searchQuery || title.original || title.title}” no Prowlarr…</p></div> : <ReleaseSearchResults search={current} categoryKey={categoryKey} connected={connected} busyId={busyId} onAdd={onAdd}/>}
   </section>;
 }
 

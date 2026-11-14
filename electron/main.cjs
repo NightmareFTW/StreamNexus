@@ -22,6 +22,7 @@ const releaseCache = new Map();
 let mainWindow;
 let authWindow;
 let openSubtitlesSession = null;
+let spotifyToken = null;
 let openSubtitlesLoginPromise = null;
 const audioStreams = new Map();
 
@@ -102,9 +103,9 @@ async function readIntegrations() {
     const encrypted = await fs.readFile(integrationsFilePath());
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
     const { result } = await safeStorage.decryptStringAsync(encrypted);
-    return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
+    return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
   } catch (error) {
-    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
+    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
     throw error;
   }
 }
@@ -114,6 +115,8 @@ async function writeIntegrations(value) {
     prowlarrUrl: String(value?.prowlarrUrl || '').trim().replace(/\/+$/, ''),
     prowlarrApiKey: String(value?.prowlarrApiKey || '').trim(),
     tmdbApiKey: String(value?.tmdbApiKey || '').trim(),
+    spotifyClientId: String(value?.spotifyClientId || '').trim(),
+    spotifyClientSecret: String(value?.spotifyClientSecret || '').trim(),
     openSubtitlesApiKey: String(value?.openSubtitlesApiKey || '').trim(),
     openSubtitlesUsername: String(value?.openSubtitlesUsername || '').trim(),
     openSubtitlesPassword: String(value?.openSubtitlesPassword || ''),
@@ -128,6 +131,8 @@ async function writeIntegrations(value) {
   await fs.mkdir(path.dirname(integrationsFilePath()), { recursive: true });
   await fs.writeFile(integrationsFilePath(), encrypted);
   openSubtitlesSession = null;
+  spotifyToken = null;
+  discoveryCache.clear();
   return { configured: Boolean(settings.prowlarrUrl && settings.prowlarrApiKey) };
 }
 
@@ -168,10 +173,8 @@ function normalizeTmdbItem(item, baseUrl, sizes) {
   };
 }
 
-async function fetchTmdbCatalog() {
-  const { tmdbApiKey } = await readIntegrations();
-  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para atualizar o catálogo.');
-  const config = await tmdbRequest('/configuration', tmdbApiKey);
+async function tmdbImageSettings(apiKey) {
+  const config = await tmdbRequest('/configuration', apiKey);
   const baseUrl = config.images?.secure_base_url || 'https://image.tmdb.org/t/p/';
   const posterSizes = config.images?.poster_sizes || [];
   const backdropSizes = config.images?.backdrop_sizes || [];
@@ -179,6 +182,13 @@ async function fetchTmdbCatalog() {
     poster: posterSizes.includes('w500') ? 'w500' : posterSizes.find((size) => /^w\d+$/.test(size)) || 'original',
     backdrop: backdropSizes.includes('w1280') ? 'w1280' : backdropSizes.find((size) => /^w\d+$/.test(size)) || 'original',
   };
+  return { baseUrl, sizes };
+}
+
+async function fetchTmdbCatalog() {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para atualizar o catálogo.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
   const language = 'pt-PT';
   const region = 'PT';
   const paths = {
@@ -220,6 +230,194 @@ async function fetchTmdbTrailer({ id, type = 'movie', title = '', year = '' } = 
     .filter((video) => video.site === 'YouTube' && video.type === 'Trailer' && video.key)
     .sort((a, b) => Number(Boolean(b.official)) - Number(Boolean(a.official)))[0];
   return selected ? { key: selected.key, name: selected.name || 'Trailer' } : null;
+}
+
+// ---- Descoberta de TV (TMDB), música (iTunes Search) e livros (Open Library) ----
+const DISCOVERY_TTL = 10 * 60 * 1000;
+const discoveryCache = new Map();
+const MEDIA_ACCENTS = ['#8f71fc', '#c28d5d', '#68727c', '#b44c7c', '#627c89', '#759065', '#9d454d', '#729caa'];
+
+async function fetchPublicJson(url) {
+  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' } });
+  if (!response.ok) throw new Error(`O serviço respondeu com erro ${response.status}.`);
+  return response.json();
+}
+
+const TV_SHELVES = [
+  { eyebrow: 'EM EMISSÃO HOJE', title: 'Hoje na televisão', path: '/tv/airing_today?language=pt-PT' },
+  { eyebrow: 'REALITY E COMPETIÇÃO', title: 'Reality e competição', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=10764' },
+  { eyebrow: 'CONVERSA E HUMOR', title: 'Talk shows', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=10767' },
+  { eyebrow: 'HISTÓRIAS REAIS', title: 'Documentários', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=99' },
+  { eyebrow: 'EM FAMÍLIA', title: 'Para os mais novos', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=10762' },
+  { eyebrow: 'DRAMA DIÁRIO', title: 'Novelas', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=10766' },
+  { eyebrow: 'ATUALIDADE', title: 'Notícias e atualidade', path: '/discover/tv?language=pt-PT&sort_by=popularity.desc&with_genres=10763' },
+];
+
+async function fetchTvDiscovery() {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para ver programas de TV.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  return Promise.all(TV_SHELVES.map(async (shelf) => {
+    const data = await tmdbRequest(shelf.path, tmdbApiKey);
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items: (data.results || []).map((item) => normalizeTmdbItem({ ...item, media_type: 'tv', title: undefined }, baseUrl, sizes)) };
+  }));
+}
+
+const MUSIC_SHELVES = [
+  { eyebrow: 'EM ALTA', title: 'Álbuns populares', term: 'top hits' },
+  { eyebrow: 'PARA CANTAR', title: 'Pop', term: 'pop' },
+  { eyebrow: 'GUITARRAS NO MÁXIMO', title: 'Rock e metal', term: 'rock' },
+  { eyebrow: 'RIMA E RITMO', title: 'Hip-hop', term: 'hip hop' },
+  { eyebrow: 'PARA DANÇAR', title: 'Eletrónica', term: 'electronic' },
+  { eyebrow: 'MÚSICA PARA CADA HISTÓRIA', title: 'Bandas sonoras', term: 'soundtrack' },
+  { eyebrow: 'ESCUTA SEM PRESSA', title: 'Jazz e clássica', term: 'jazz classical' },
+  { eyebrow: 'DE PORTUGAL', title: 'Fado e música portuguesa', term: 'fado portugal' },
+];
+
+function normalizeAlbum(album, index) {
+  const artwork = String(album.artworkUrl100 || '').replace(/\/\d+x\d+bb\./, '/600x600bb.');
+  const year = album.releaseDate ? Number(String(album.releaseDate).slice(0, 4)) : '';
+  const tracks = Number(album.trackCount) || 0;
+  return {
+    id: `album-${album.collectionId}`, type: 'Álbum', title: album.collectionName, original: album.collectionName,
+    creator: album.artistName || '', year, rating: '', genre: album.primaryGenreName || 'Música', genres: album.primaryGenreName ? [album.primaryGenreName] : [],
+    runtime: tracks ? `${tracks} faixas` : 'Álbum', poster: artwork, backdrop: artwork,
+    description: [album.artistName, tracks ? `${tracks} faixas` : '', album.primaryGenreName].filter(Boolean).join(' · '),
+    searchQuery: `${album.artistName || ''} ${String(album.collectionName || '').replace(/\s*[\(\[].*$/, '')}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
+  };
+}
+
+// ---- Spotify (opcional): catálogo de álbuns via client credentials ----
+async function spotifyAccessToken(clientId, clientSecret) {
+  const fingerprint = `${clientId}:${clientSecret}`;
+  if (spotifyToken?.fingerprint === fingerprint && spotifyToken.expiresAt > Date.now() + 30000) return spotifyToken.token;
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${Buffer.from(fingerprint).toString('base64')}` },
+    body: 'grant_type=client_credentials',
+  });
+  if (!response.ok) throw new Error(response.status === 400 || response.status === 401 ? 'O Spotify recusou o Client ID ou o Client Secret.' : `O Spotify respondeu com erro ${response.status}.`);
+  const data = await response.json();
+  spotifyToken = { fingerprint, token: data.access_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+  return spotifyToken.token;
+}
+
+async function spotifyGet(token, resource, params) {
+  for (const limit of ['30', '10']) {
+    const query = new URLSearchParams({ ...params, limit });
+    const response = await fetch(`https://api.spotify.com/v1${resource}?${query}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+    if (response.status === 400 && limit === '30') continue;
+    if (!response.ok) throw new Error(`O Spotify respondeu com erro ${response.status}.`);
+    return response.json();
+  }
+  return {};
+}
+
+const SPOTIFY_SHELVES = [
+  { eyebrow: 'ACABADOS DE SAIR', title: 'Novos lançamentos', browse: true },
+  { eyebrow: 'PARA CANTAR', title: 'Pop', genre: 'pop' },
+  { eyebrow: 'GUITARRAS NO MÁXIMO', title: 'Rock e metal', genre: 'rock' },
+  { eyebrow: 'RIMA E RITMO', title: 'Hip-hop', genre: 'hip-hop' },
+  { eyebrow: 'PARA DANÇAR', title: 'Eletrónica', genre: 'electronic' },
+  { eyebrow: 'MÚSICA PARA CADA HISTÓRIA', title: 'Bandas sonoras', genre: 'soundtrack' },
+  { eyebrow: 'ESCUTA SEM PRESSA', title: 'Jazz', genre: 'jazz' },
+  { eyebrow: 'DE PORTUGAL', title: 'Fado e música portuguesa', genre: 'fado' },
+];
+
+function normalizeSpotifyAlbum(album, shelf, index) {
+  const art = [...(album.images || [])].sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || '';
+  const artists = (album.artists || []).map((artist) => artist.name).filter(Boolean).join(', ');
+  const year = album.release_date ? Number(String(album.release_date).slice(0, 4)) : '';
+  const tracks = Number(album.total_tracks) || 0;
+  const genre = shelf.genre ? shelf.title : 'Música';
+  return {
+    id: `album-sp-${album.id}`, type: 'Álbum', title: album.name, original: album.name, creator: artists, year, rating: '',
+    genre, genres: [genre], runtime: tracks ? `${tracks} faixas` : 'Álbum', poster: art, backdrop: art,
+    description: [artists, tracks ? `${tracks} faixas` : '', year].filter(Boolean).join(' · '),
+    searchQuery: `${artists.split(', ')[0] || ''} ${String(album.name || '').replace(/\s*[\(\[].*$/, '')}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
+  };
+}
+
+async function fetchSpotifyMusic(clientId, clientSecret) {
+  const token = await spotifyAccessToken(clientId, clientSecret);
+  return Promise.all(SPOTIFY_SHELVES.map(async (shelf) => {
+    const data = shelf.browse
+      ? await spotifyGet(token, '/browse/new-releases', { country: 'PT' })
+      : await spotifyGet(token, '/search', { q: `genre:"${shelf.genre}"`, type: 'album', market: 'PT' });
+    const list = data.albums?.items || [];
+    const seen = new Set();
+    const items = list.filter((album) => album?.id && album.name && album.images?.length && !seen.has(album.id) && seen.add(album.id)).map((album, index) => normalizeSpotifyAlbum(album, shelf, index));
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+  }));
+}
+
+async function testSpotify(value = {}) {
+  const clientId = String(value.spotifyClientId || '').trim();
+  const clientSecret = String(value.spotifyClientSecret || '').trim();
+  if (!clientId || !clientSecret) throw new Error('Indica o Client ID e o Client Secret do Spotify.');
+  spotifyToken = null;
+  const token = await spotifyAccessToken(clientId, clientSecret);
+  await spotifyGet(token, '/search', { q: 'genre:"pop"', type: 'album', market: 'PT' });
+  return { appName: 'Spotify' };
+}
+
+async function fetchMusicDiscovery() {
+  const { spotifyClientId, spotifyClientSecret } = await readIntegrations();
+  if (spotifyClientId && spotifyClientSecret) {
+    try {
+      const rows = await fetchSpotifyMusic(spotifyClientId, spotifyClientSecret);
+      if (rows.some((row) => row.items.length)) return rows;
+    } catch { /* usa o iTunes como alternativa */ }
+  }
+  return Promise.all(MUSIC_SHELVES.map(async (shelf) => {
+    const params = new URLSearchParams({ term: shelf.term, media: 'music', entity: 'album', country: 'PT', limit: '30' });
+    const data = await fetchPublicJson(`https://itunes.apple.com/search?${params}`);
+    const items = (data.results || []).filter((album) => album.collectionId && album.collectionName && album.artworkUrl100).map(normalizeAlbum);
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+  }));
+}
+
+const BOOK_SHELVES = [
+  { eyebrow: 'EM ALTA ESTA SEMANA', title: 'Mais procurados', url: 'https://openlibrary.org/trending/weekly.json?limit=30', genre: 'Diversos' },
+  { eyebrow: 'MUNDOS PARA DESCOBRIR', title: 'Fantasia', url: 'https://openlibrary.org/subjects/fantasy.json?limit=30', genre: 'Fantasia' },
+  { eyebrow: 'OUTROS MUNDOS, OUTRAS IDEIAS', title: 'Ficção científica', url: 'https://openlibrary.org/subjects/science_fiction.json?limit=30', genre: 'Ficção científica' },
+  { eyebrow: 'CHEIAS DE PISTAS', title: 'Mistério e crime', url: 'https://openlibrary.org/subjects/mystery_and_detective_stories.json?limit=30', genre: 'Mistério' },
+  { eyebrow: 'HISTÓRIAS DE ENCONTROS', title: 'Romance', url: 'https://openlibrary.org/subjects/romance.json?limit=30', genre: 'Romance' },
+  { eyebrow: 'PARA ARREPIAR', title: 'Terror e suspense', url: 'https://openlibrary.org/subjects/horror.json?limit=30', genre: 'Terror' },
+  { eyebrow: 'HISTÓRIAS REAIS', title: 'Biografias', url: 'https://openlibrary.org/subjects/biography.json?limit=30', genre: 'Biografia' },
+  { eyebrow: 'COMICS E MANGA', title: 'Banda desenhada', url: 'https://openlibrary.org/subjects/graphic_novels.json?limit=30', genre: 'Banda desenhada' },
+];
+
+function normalizeBook(work, shelf, index) {
+  const coverId = work.cover_id || work.cover_i;
+  const authors = (work.authors ? work.authors.map((author) => author.name) : work.author_name || []).filter(Boolean);
+  const year = Number(work.first_publish_year) || '';
+  const key = String(work.key || '').replace('/works/', '');
+  const poster = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : '';
+  return {
+    id: `book-${key}`, type: 'Livro', title: work.title, original: work.title, creator: authors.join(', '), year, rating: '',
+    genre: shelf.genre, genres: [shelf.genre], runtime: 'Livro', poster, backdrop: poster,
+    description: [authors.join(', '), year].filter(Boolean).join(' · ') || 'Descobre mais sobre este livro.',
+    searchQuery: `${work.title} ${authors[0] || ''}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
+  };
+}
+
+async function fetchBooksDiscovery() {
+  return Promise.all(BOOK_SHELVES.map(async (shelf) => {
+    const data = await fetchPublicJson(shelf.url);
+    const items = (data.works || []).filter((work) => work.title && (work.cover_id || work.cover_i)).map((work, index) => normalizeBook(work, shelf, index));
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+  }));
+}
+
+async function fetchDiscovery({ kind } = {}) {
+  const loaders = { tv: fetchTvDiscovery, music: fetchMusicDiscovery, books: fetchBooksDiscovery };
+  if (!loaders[kind]) throw new Error('Tipo de descoberta inválido.');
+  const cached = discoveryCache.get(kind);
+  if (cached && Date.now() - cached.at < DISCOVERY_TTL) return cached.rows;
+  const rows = await loaders[kind]();
+  discoveryCache.set(kind, { at: Date.now(), rows });
+  return rows;
 }
 
 async function openExternalPlayer(streamUrl) {
@@ -656,7 +854,7 @@ function configureContentSecurityPolicy() {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https://image.tmdb.org",
+    "img-src 'self' data: https://image.tmdb.org https://*.mzstatic.com https://i.scdn.co https://covers.openlibrary.org https://archive.org https://*.archive.org",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
@@ -692,6 +890,8 @@ function registerIpc() {
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
+  ipcMain.handle('discovery:fetch', resultHandler(fetchDiscovery));
+  ipcMain.handle('spotify:test', resultHandler(testSpotify));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
   ipcMain.handle('player:stream-info', (_event, id) => getAudioStreamInfo(id));
