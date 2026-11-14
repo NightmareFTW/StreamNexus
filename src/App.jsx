@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
+import { BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
@@ -250,6 +251,8 @@ function App() {
   const [catalogRows, setCatalogRows] = useState(null);
   const [catalogStatus, setCatalogStatus] = useState('sample');
   const [catalogUpdated, setCatalogUpdated] = useState('');
+  const [tvMode, setTvMode] = useState('channels');
+  const [adultMode, setAdultMode] = useState('videos');
   const [discovery, setDiscovery] = useState({});
   const [heroIndex, setHeroIndex] = useState(0);
   const [subtitleResults, setSubtitleResults] = useState([]);
@@ -885,7 +888,6 @@ function App() {
     setSubtitleStatus('original');
   };
 
-  const [adultMode, setAdultMode] = useState('videos');
   const [adultCategory, setAdultCategory] = useState('Todos');
   const [adultVideos, setAdultVideos] = useState({ status: 'idle', rows: [], message: '' });
   const adultRequestRef = useRef(0);
@@ -910,7 +912,6 @@ function App() {
     if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos(adultCategory);
   }, [activePage, adultEnabled, adultMode, adultCategory, loadAdultVideos]);
 
-  const [tvMode, setTvMode] = useState('channels');
   const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
   const [liveCountries, setLiveCountries] = useState([]);
   const [liveChannels, setLiveChannels] = useState({ status: 'idle', items: [], categories: [], message: '' });
@@ -957,6 +958,8 @@ function App() {
     } catch (error) { notify(getError(error), 'error'); }
   };
 
+  const [booksView, setBooksView] = useState('dashboard');
+  const showDiscover = activePage !== 'books' || booksView === 'discover';
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
     setReading(next);
@@ -1282,7 +1285,8 @@ function App() {
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
           <AdultVideosPage mode={adultMode} onMode={setAdultMode} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos(adultCategory)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
-          <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
+          <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
+            {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
             {activePage === 'tv' && <TvModeTabs mode={tvMode} onMode={setTvMode}/>}
             {activePage === 'adult' && <AdultModeTabs mode={adultMode} onMode={setAdultMode}/>}
             {genre === 'Todos' && activePage !== 'books' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
@@ -1291,17 +1295,18 @@ function App() {
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>}
 
-            {activePage === 'books' && <ReadingDashboard reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved} onGoal={setReadingGoal}/>}
-            {activePage === 'books' && <div className="section-heading rd-discover"><div><span className="eyebrow">NOVAS LEITURAS</span><h2>Descobrir livros</h2></div></div>}
-            {activePage !== 'home' && <ScrollRow className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</ScrollRow>}
+            {activePage === 'books' && booksView === 'dashboard' && <ReadingDashboard reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved} onGoal={setReadingGoal}/>}
+            {activePage === 'books' && booksView === 'discover' && <div className="section-heading rd-discover"><div><span className="eyebrow">NOVAS LEITURAS</span><h2>Descobrir livros</h2></div></div>}
+            {activePage === 'books' && !['dashboard', 'discover'].includes(booksView) && <BooksCollectionView view={booksView} reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved}/>}
+            {activePage !== 'home' && showDiscover && <ScrollRow className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</ScrollRow>}
 
-            {discoveryPage && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (!['tv', 'adult'].includes(activePage) || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
+            {discoveryPage && showDiscover && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (!['tv', 'adult'].includes(activePage) || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
               {(activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey ? <><strong>Liga o TMDB para ver este catálogo</strong><p>Adiciona a API key do TMDB nas definições para carregar os títulos em destaque.</p><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar TMDB <Icon name="chevron" size={14}/></button></>
                 : discoveryState?.status === 'error' ? <><strong>Não foi possível carregar {DISCOVERY_LABELS[activePage]}</strong><p className="is-error-text">{discoveryState.message}</p><button className="text-link" onClick={() => loadDiscovery(activePage)}>Tentar novamente <Icon name="refresh" size={14}/></button></>
                   : <><strong>A carregar {DISCOVERY_LABELS[activePage]}…</strong><p>A reunir os títulos em destaque.</p></>}
             </div>}
-            {genre !== 'Todos' && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
-            {visibleBrowsingShelves.map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
+            {genre !== 'Todos' && showDiscover && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
+            {(showDiscover ? visibleBrowsingShelves : []).map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls">{shelf.page !== activePage && <button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button>}<div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
               <div className={`poster-row ${shelf.ranked ? 'ranked-row' : ''}`}>{shelf.items.map((item, index) => <PosterCard key={item.id} item={item} index={index} rank={shelf.ranked ? index + 1 : null} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>
             </section>)}
@@ -1452,101 +1457,6 @@ function App() {
       </div>}
     </div>
   );
-}
-
-// ---- Estante pessoal de leitura (guardada localmente) ----
-const READING_KEY = 'streamnexus.reading';
-const READING_STATUS = { want: 'Quero ler', reading: 'A ler', read: 'Lido' };
-const DAY_MS = 86400000;
-const dayKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-
-function loadReading() {
-  try {
-    const value = JSON.parse(localStorage.getItem(READING_KEY));
-    return { shelf: value?.shelf && typeof value.shelf === 'object' ? value.shelf : {}, goal: Number(value?.goal) || 0, days: Array.isArray(value?.days) ? value.days : [] };
-  } catch { return { shelf: {}, goal: 0, days: [] }; }
-}
-
-function readingStreaks(days) {
-  const set = new Set(days);
-  const noon = (offset = 0) => { const date = new Date(); date.setHours(12, 0, 0, 0); return new Date(date.getTime() - offset * DAY_MS); };
-  let current = 0;
-  let offset = set.has(dayKey(noon())) ? 0 : 1;
-  while (set.has(dayKey(noon(offset)))) { current += 1; offset += 1; }
-  let best = 0; let run = 0; let previous = null;
-  [...set].sort().forEach((key) => {
-    const time = new Date(`${key}T12:00:00`).getTime();
-    run = previous !== null && Math.round((time - previous) / DAY_MS) === 1 ? run + 1 : 1;
-    best = Math.max(best, run); previous = time;
-  });
-  return { current, best, last7: Array.from({ length: 7 }, (_, index) => set.has(dayKey(noon(6 - index)))) };
-}
-
-function ReadingDashboard({ reading, saved, onOpen, onSave, onGoal }) {
-  const [goalDraft, setGoalDraft] = useState('');
-  const [editingGoal, setEditingGoal] = useState(false);
-  const entries = Object.values(reading.shelf);
-  const now = new Date();
-  const hour = now.getHours();
-  const greeting = hour < 6 ? 'Boa madrugada' : hour < 13 ? 'Bom dia' : hour < 20 ? 'Boa tarde' : 'Boa noite';
-  const currentlyReading = entries.filter((entry) => entry.status === 'reading').sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-  const wantToRead = entries.filter((entry) => entry.status === 'want').sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-  const recent = [...entries].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, 12);
-  const streak = readingStreaks(reading.days);
-  const readThisYear = entries.filter((entry) => entry.status === 'read' && entry.finishedAt && new Date(entry.finishedAt).getFullYear() === now.getFullYear()).length;
-  const monthPrefix = dayKey(now).slice(0, 7);
-  const daysThisMonth = reading.days.filter((day) => day.startsWith(monthPrefix)).length;
-  const challengeTarget = 5;
-  const genreCounts = entries.reduce((map, entry) => map.set(entry.book.genre, (map.get(entry.book.genre) || 0) + 1), new Map());
-  const topGenres = [...genreCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
-  const submitGoal = (event) => {
-    event.preventDefault();
-    const value = Math.max(0, Math.min(999, Math.round(Number(goalDraft) || 0)));
-    onGoal(value); setEditingGoal(false); setGoalDraft('');
-  };
-  return <section className="reading-dashboard">
-    <div className="rd-head"><span className="eyebrow">A MINHA ESTANTE</span><h1>{greeting}</h1></div>
-    <div className="rd-widgets">
-      <article className="rd-card">
-        <h3><Icon name="spark" size={16}/> Sequência de leitura</h3>
-        <div className="rd-streak"><strong>{streak.current}</strong><span>{streak.current === 1 ? 'dia seguido' : 'dias seguidos'}</span></div>
-        <small className="rd-muted">Melhor: {streak.best} {streak.best === 1 ? 'dia' : 'dias'}</small>
-        <div className="rd-dots" aria-label="Últimos 7 dias">{streak.last7.map((active, index) => <i key={index} className={active ? 'is-active' : ''}></i>)}</div>
-        <small className="rd-muted">Últimos 7 dias</small>
-      </article>
-      <article className="rd-card rd-wide">
-        <h3><Icon name="book" size={16}/> A ler agora</h3>
-        {currentlyReading.length === 0 ? <p className="rd-empty-text">Marca um livro como “A ler” para acompanhares o progresso aqui.</p> : <div className="rd-reading-list">{currentlyReading.slice(0, 3).map((entry) => <button key={entry.book.id} className="rd-reading-item" onClick={() => onOpen(entry.book)}>
-          <img src={entry.book.poster} alt="" loading="lazy"/>
-          <span><strong>{entry.book.title}</strong><small>{entry.book.creator}</small><span className="rd-progress"><i style={{ width: `${entry.progress || 0}%` }}></i></span></span><em>{entry.progress || 0}%</em>
-        </button>)}</div>}
-      </article>
-      <article className="rd-card">
-        <h3><Icon name="check" size={16}/> Meta de leitura {now.getFullYear()}</h3>
-        {reading.goal && !editingGoal ? <>
-          <div className="rd-goal"><strong>{readThisYear}</strong><span>/ {reading.goal} livros</span></div>
-          <span className="rd-progress"><i style={{ width: `${Math.min(100, readThisYear / reading.goal * 100)}%` }}></i></span>
-          <button className="text-link" onClick={() => { setGoalDraft(String(reading.goal)); setEditingGoal(true); }}>Alterar meta</button>
-        </> : <form className="rd-goal-form" onSubmit={submitGoal}><p className="rd-empty-text">Quantos livros queres ler este ano?</p><div><input type="number" min="1" max="999" className="text-input" value={goalDraft} onChange={(event) => setGoalDraft(event.target.value)} aria-label="Meta de livros por ano" placeholder="12"/><button className="button button-primary" type="submit">Definir</button></div></form>}
-      </article>
-      <article className="rd-card">
-        <h3><Icon name="spark" size={16}/> DNA de leitura</h3>
-        {entries.length < 3 ? <p className="rd-empty-text">Adiciona pelo menos 3 livros à estante para veres os teus géneros favoritos.</p> : <div className="rd-dna">{topGenres.map(([name, count]) => <div key={name}><span>{name}</span><span className="rd-progress"><i style={{ width: `${count / entries.length * 100}%` }}></i></span><em>{count}</em></div>)}</div>}
-      </article>
-      <article className="rd-card">
-        <h3><Icon name="check" size={16}/> Desafio do mês</h3>
-        <strong className="rd-challenge-title">Hábito de leitura</strong>
-        <small className="rd-muted">Lê em {challengeTarget} dias diferentes este mês</small>
-        <span className="rd-progress"><i style={{ width: `${Math.min(100, daysThisMonth / challengeTarget * 100)}%` }}></i></span>
-        <small className="rd-muted">{Math.min(daysThisMonth, challengeTarget)} / {challengeTarget}</small>
-      </article>
-    </div>
-    {[['Adicionados recentemente', recent], ['Quero ler', wantToRead]].map(([title, list]) => (title === 'Quero ler' && list.length === 0) ? null : <section className="content-section rd-section" key={title}>
-      <div className="section-heading"><div><h2>{title} <span className="rd-count">{list.length}</span></h2></div></div>
-      {list.length === 0 ? <div className="rd-empty"><Icon name="book" size={20}/><span>A tua estante está vazia. Abre um livro abaixo e marca-o como “Quero ler” ou “A ler”.</span></div>
-        : <div className="poster-row">{list.map((entry, index) => <PosterCard key={entry.book.id} item={entry.book} index={index} rank={null} saved={saved.includes(entry.book.id)} onOpen={() => onOpen(entry.book)} onSave={() => onSave(entry.book.id)}/>)}</div>}
-    </section>)}
-  </section>;
 }
 
 function formatBytes(bytes = 0) {

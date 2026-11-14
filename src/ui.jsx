@@ -34,6 +34,10 @@ export function Icon({ name, size = 18, stroke = 1.8 }) {
     cloud: <><path d="M20 16.2A4 4 0 0 0 18 8.5a6 6 0 0 0-11.7 1.4A4 4 0 0 0 7 18h11"/><path d="m12 12-3 3h2v4h2v-4h2z"/></>,
     alert: <><path d="M10.3 4.3 2.9 17a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
     refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></>,
+    chart: <><path d="M4 20V10m6 10V4m6 16v-7m4 7H2"/></>,
+    history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></>,
+    trophy: <><path d="M8 21h8m-4-4v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></>,
+    user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
     trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></>,
   };
   return <svg {...common}>{paths[name] || paths.spark}</svg>;

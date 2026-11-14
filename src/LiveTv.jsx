@@ -31,7 +31,7 @@ export function LiveTvPage({ mode, onMode, countries, country, onCountry, state,
         <label className="live-field"><span>País</span>
           <select value={country} onChange={(event) => onCountry(event.target.value)} aria-label="País dos canais">
             {!current && <option value={country}>{country}</option>}
-            {countries.map((entry) => <option key={entry.code} value={entry.code}>{entry.flag} {entry.name} ({entry.count})</option>)}
+            {countries.map((entry) => <option key={entry.code} value={entry.code}>{entry.name} ({entry.count})</option>)}
           </select>
         </label>
         <label className="live-field live-search"><Icon name="search" size={15}/><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Procurar canal" aria-label="Procurar canal"/></label>
