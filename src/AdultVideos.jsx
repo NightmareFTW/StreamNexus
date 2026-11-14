@@ -14,7 +14,7 @@ export function AdultModeTabs({ mode, onMode }) {
   </div>;
 }
 
-export const ADULT_ORIENTATIONS = [['straight', 'Straight'], ['gay', 'Gay'], ['trans', 'Trans']];
+export const ADULT_ORIENTATIONS = [['straight', 'Hétero'], ['gay', 'Gay'], ['trans', 'Trans']];
 
 export function AdultVideosPage({ mode, onMode, orientation, onOrientation, state, category, onCategory, onPlay, onRetry }) {
   return <section className="live-tv adult-videos page-in">
