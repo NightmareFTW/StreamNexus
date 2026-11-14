@@ -28,9 +28,9 @@ function matchesTorrentTitle(torrent, title) {
 }
 
 const isVideoTitle = (title) => !['Álbum', 'Livro'].includes(title?.type);
-const titleCategory = (title) => (title?.type === 'Álbum' ? 'music' : title?.type === 'Livro' ? 'books' : title?.type === 'Série' ? 'series' : 'movies');
-const DISCOVERY_PAGES = ['tv', 'music', 'books'];
-const DISCOVERY_LABELS = { tv: 'programas de TV', music: 'álbuns', books: 'livros' };
+const titleCategory = (title) => (title?.adult ? 'adult' : title?.type === 'Álbum' ? 'music' : title?.type === 'Livro' ? 'books' : title?.type === 'Série' ? 'series' : 'movies');
+const DISCOVERY_PAGES = ['tv', 'music', 'books', 'adult'];
+const DISCOVERY_LABELS = { tv: 'programas de TV', music: 'álbuns', books: 'livros', adult: 'títulos' };
 
 const VIDEO_FILE_PATTERN = /\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|wmv|mpe?g)$/i;
 
@@ -417,12 +417,13 @@ function App() {
     if (!DISCOVERY_PAGES.includes(activePage)) return;
     const current = discovery[activePage];
     if (current && current.status !== 'error') return;
-    if (activePage === 'tv' && !integrationSettings.tmdbApiKey) return;
+    if ((activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey) return;
+    if (activePage === 'adult' && !adultEnabled) return;
     loadDiscovery(activePage);
-  }, [activePage, integrationSettings.tmdbApiKey]);
+  }, [activePage, adultEnabled, integrationSettings.tmdbApiKey]);
 
   const discoveryLookup = useMemo(() => Object.values(discovery).flatMap((entry) => (entry.rows || []).flatMap((row) => row.items)), [discovery]);
-  const discoveryPage = DISCOVERY_PAGES.includes(activePage);
+  const discoveryPage = DISCOVERY_PAGES.includes(activePage) && (activePage !== 'adult' || adultEnabled);
   const discoveryState = discovery[activePage];
   const discoveryShelves = discoveryPage ? (discoveryState?.rows || []) : [];
   const discoveryItems = [...new Map(discoveryShelves.flatMap((row) => row.items).filter((item) => item.poster).map((item) => [item.id, item])).values()];
@@ -434,7 +435,7 @@ function App() {
       : (catalogRows?.trending?.length ? catalogRows.trending : catalogTitles);
   const featuredTitle = featuredTitles[heroIndex % Math.max(featuredTitles.length, 1)] || titles[0];
   useEffect(() => {
-    if (!['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
+    if (!(['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) || featuredTitles.length < 2 || query || genre !== 'Todos') return undefined;
     const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % featuredTitles.length), 8500);
     return () => window.clearInterval(timer);
   }, [activePage, featuredTitles.length, query, genre]);
@@ -1034,21 +1035,6 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (activePage !== 'adult' || !adultEnabled) return;
-    const categoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
-    if (!integrationSettings.prowlarrUrl || !integrationSettings.prowlarrApiKey || (releaseSearch?.categoryKey === categoryKey && releaseSearch?.collectionTitle && releaseSearch.status !== 'error')) return;
-    if (lastBrowsePageRef.current !== activePage) {
-      lastBrowsePageRef.current = activePage;
-      browseVisitRef.current += 1;
-    }
-    const firstCollection = DISCOVERY_COLLECTIONS[activePage][0];
-    const requestKey = `${activePage}:${browseVisitRef.current}:${firstCollection.title}`;
-    if (collectionRequestRef.current === requestKey) return;
-    collectionRequestRef.current = requestKey;
-    searchReleaseSources(firstCollection.query, categoryKey, null, firstCollection.title);
-  }, [activePage, adultEnabled, integrationSettings.prowlarrUrl, integrationSettings.prowlarrApiKey, releaseSearch?.categoryKey]);
-
   const saveIntegrationSettings = async (event) => {
     event.preventDefault();
     setIntegrationTest('A guardar configuração…');
@@ -1222,18 +1208,18 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
-        ) : ['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) && !query ? (
+        ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
             {genre === 'Todos' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
-              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : activePage === 'tv' ? 'PROGRAMAS EM DESTAQUE' : activePage === 'music' ? 'ÁLBUNS EM DESTAQUE' : activePage === 'books' ? 'LIVROS EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'}{activePage === 'home' && ` ${featuredTitle.type.toUpperCase()}`}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.creator || featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta">{featuredTitle.rating && <><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i></>}<span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}>{isVideoTitle(featuredTitle) ? <Icon name="play" size={17}/> : <Icon name="spark" size={17}/>}{isVideoTitle(featuredTitle) ? 'Ver agora' : 'Ver detalhes'}</button>{isVideoTitle(featuredTitle) && <button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button>}<button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
+              <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : activePage === 'tv' ? 'PROGRAMAS EM DESTAQUE' : activePage === 'music' ? 'ÁLBUNS EM DESTAQUE' : activePage === 'books' ? 'LIVROS EM DESTAQUE' : activePage === 'adult' ? 'EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'}{activePage === 'home' && ` ${featuredTitle.type.toUpperCase()}`}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.creator || featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta">{featuredTitle.rating && <><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i></>}<span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}>{isVideoTitle(featuredTitle) ? <Icon name="play" size={17}/> : <Icon name="spark" size={17}/>}{isVideoTitle(featuredTitle) ? 'Ver agora' : 'Ver detalhes'}</button>{isVideoTitle(featuredTitle) && <button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button>}<button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>}
 
             {activePage !== 'home' && <div className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</div>}
 
-            {discoveryPage && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (activePage !== 'tv' || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
-              {activePage === 'tv' && !integrationSettings.tmdbApiKey ? <><strong>Liga o TMDB para ver programas de TV</strong><p>Adiciona a API key do TMDB nas definições para carregar programas, reality, documentários e muito mais.</p><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar TMDB <Icon name="chevron" size={14}/></button></>
+            {discoveryPage && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (!['tv', 'adult'].includes(activePage) || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
+              {(activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey ? <><strong>Liga o TMDB para ver este catálogo</strong><p>Adiciona a API key do TMDB nas definições para carregar os títulos em destaque.</p><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar TMDB <Icon name="chevron" size={14}/></button></>
                 : discoveryState?.status === 'error' ? <><strong>Não foi possível carregar {DISCOVERY_LABELS[activePage]}</strong><p className="is-error-text">{discoveryState.message}</p><button className="text-link" onClick={() => loadDiscovery(activePage)}>Tentar novamente <Icon name="refresh" size={14}/></button></>
                   : <><strong>A carregar {DISCOVERY_LABELS[activePage]}…</strong><p>A reunir os títulos em destaque.</p></>}
             </div>}

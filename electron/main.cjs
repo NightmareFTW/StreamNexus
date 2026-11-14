@@ -410,8 +410,39 @@ async function fetchBooksDiscovery() {
   }));
 }
 
+// ---- Adultos (TMDB com include_adult, só quando a categoria está ativa) ----
+const ADULT_SHELVES = [
+  { eyebrow: 'EM ALTA', title: 'Em destaque', keywords: ['erotic', 'softcore', 'erotica'] },
+  { eyebrow: 'SUSPENSE E DESEJO', title: 'Thrillers eróticos', keywords: ['erotic thriller'] },
+  { eyebrow: 'HISTÓRIAS A DOIS', title: 'Drama erótico', keywords: ['erotic drama', 'sexuality'] },
+  { eyebrow: 'LEVE E ATREVIDO', title: 'Comédia', keywords: ['sex comedy', 'erotic comedy'] },
+  { eyebrow: 'DESENHADO PARA ADULTOS', title: 'Animação adulta', keywords: ['adult animation', 'hentai'] },
+  { eyebrow: 'DE OUTRAS ÉPOCAS', title: 'Clássicos', keywords: ['sexploitation', 'pinku eiga'] },
+];
+
+async function fetchAdultDiscovery() {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para ver este catálogo.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const rows = await Promise.all(ADULT_SHELVES.map(async (shelf) => {
+    const ids = new Set();
+    for (const keyword of shelf.keywords) {
+      try {
+        const found = await tmdbRequest(`/search/keyword?query=${encodeURIComponent(keyword)}`, tmdbApiKey);
+        (found.results || []).slice(0, 2).forEach((entry) => ids.add(entry.id));
+      } catch { /* ignora palavras-chave sem resultados */ }
+    }
+    if (!ids.size) return { eyebrow: shelf.eyebrow, title: shelf.title, items: [] };
+    const data = await tmdbRequest(`/discover/movie?language=pt-PT&include_adult=true&sort_by=popularity.desc&with_keywords=${[...ids].join('|')}`, tmdbApiKey);
+    const items = (data.results || []).filter((item) => item.poster_path).map((item) => ({ ...normalizeTmdbItem({ ...item, media_type: 'movie' }, baseUrl, sizes), adult: true }));
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+  }));
+  if (!rows.some((row) => row.items.length)) throw new Error('O TMDB não devolveu títulos para esta categoria.');
+  return rows;
+}
+
 async function fetchDiscovery({ kind } = {}) {
-  const loaders = { tv: fetchTvDiscovery, music: fetchMusicDiscovery, books: fetchBooksDiscovery };
+  const loaders = { tv: fetchTvDiscovery, music: fetchMusicDiscovery, books: fetchBooksDiscovery, adult: fetchAdultDiscovery };
   if (!loaders[kind]) throw new Error('Tipo de descoberta inválido.');
   const cached = discoveryCache.get(kind);
   if (cached && Date.now() - cached.at < DISCOVERY_TTL) return cached.rows;
