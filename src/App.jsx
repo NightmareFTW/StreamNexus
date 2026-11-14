@@ -575,18 +575,27 @@ function App() {
     setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true, direct: false } : current);
   };
 
-  const resumePlayback = async (position, exact = false) => {
+  const resumePlayback = async (position, exact = false, options = {}) => {
     if (!playing?.sourceUrl || playing.resuming) return;
     const startAt = Math.max(0, Math.floor(position) - (exact ? 0 : 3));
+    const quality = options.quality ?? playing.quality ?? (playing.transcoded ? '1080' : 'original');
     setPlayerPlaybackError('');
     setPlaying((current) => (current ? { ...current, url: '', id: '', resuming: true } : current));
-    const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, transcodeVideo: Boolean(playing.transcoded), startAt });
+    const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, transcodeVideo: quality !== 'original', quality: quality === 'original' ? '' : quality, startAt });
     if (stream.audioWarning) {
       setPlaying((current) => (current ? { ...current, resuming: false } : current));
       setPlayerPlaybackError(`Não foi possível retomar a reprodução. ${stream.audioWarning}`);
       return;
     }
-    setPlaying((current) => (current ? { ...current, ...stream, resuming: false, direct: false, offset: startAt, resumes: exact ? current.resumes || 0 : (current.resumes || 0) + 1 } : current));
+    setPlaying((current) => (current ? { ...current, ...stream, resuming: false, direct: false, offset: startAt, quality, transcoded: quality !== 'original' || Boolean(stream.transcoded), resumes: exact ? current.resumes || 0 : (current.resumes || 0) + 1 } : current));
+  };
+
+  const changeQuality = async (quality) => {
+    setQualityMenuOpen(false);
+    setSlowDismissed(true);
+    if (!playing?.sourceUrl || (playing.quality || 'original') === quality) return;
+    const position = (playing.offset || 0) + (playerVideoRef.current?.currentTime || 0);
+    await resumePlayback(position, true, { quality });
   };
 
   const handleVideoEnded = () => {
@@ -597,6 +606,26 @@ function App() {
 
   const pipedSeek = Boolean(playing?.piped && !playing.live && playing.totalDuration);
   const [seekDraft, setSeekDraft] = useState(null);
+  const [slowConnection, setSlowConnection] = useState(false);
+  const [slowDismissed, setSlowDismissed] = useState(false);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const video = playerVideoRef.current;
+    setSlowConnection(false);
+    setSlowDismissed(false);
+    if (!isPlayerOpen || !video || playing?.live) return undefined;
+    const stalls = [];
+    const onWaiting = () => {
+      if (video.currentTime < 4 || video.seeking) return;
+      const now = Date.now();
+      stalls.push(now);
+      while (stalls.length && now - stalls[0] > 90000) stalls.shift();
+      if (stalls.length >= 3) setSlowConnection(true);
+    };
+    video.addEventListener('waiting', onWaiting);
+    return () => video.removeEventListener('waiting', onWaiting);
+  }, [isPlayerOpen, playing?.url, playing?.live]);
 
   const togglePlayerPlayback = () => {
     const video = playerVideoRef.current;
@@ -1511,7 +1540,7 @@ function App() {
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <span className="eyebrow">{modal.item.source?.toUpperCase()} · LEITOR INCORPORADO</span>
           <h2>{modal.item.title}</h2>
-          <div className="embed-frame" style={modal.item.embedHeight ? { aspectRatio: 'auto', height: modal.item.embedHeight } : undefined}><iframe title={modal.item.title} src={modal.item.embedUrl} allow="autoplay; fullscreen; encrypted-media" allowFullScreen referrerPolicy="no-referrer" sandbox={modal.item.embedHeight ? 'allow-scripts allow-same-origin allow-presentation allow-forms' : 'allow-scripts allow-same-origin allow-presentation'}/></div>
+          <div className="embed-frame" style={modal.item.embedHeight ? { aspectRatio: 'auto', height: modal.item.embedHeight } : undefined}><iframe title={modal.item.title} src={modal.item.embedUrl} allow="autoplay *; fullscreen *; encrypted-media *" allowFullScreen referrerPolicy="no-referrer" sandbox={modal.item.embedHeight ? 'allow-scripts allow-same-origin allow-presentation allow-forms' : 'allow-scripts allow-same-origin allow-presentation'}/></div>
           <small className="embed-note">{modal.item.embedHeight ? <>Pré-visualização de cerca de 30 s por faixa. Para ouvir completo, abre no {modal.item.source}. {modal.item.linkUrl && <button className="text-link" onClick={() => window.streamnexus?.openLink?.(modal.item.linkUrl)?.catch((error) => notify(getError(error), 'error'))}>Abrir no {modal.item.source}</button>}</> : <>Vídeo reproduzido a partir de {modal.item.source}. A StreamNexus não aloja nem descarrega este conteúdo.</>}</small>
         </div>}
 
@@ -1571,6 +1600,7 @@ function App() {
           <div className="player-frame">
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
+            {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
             {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
@@ -1597,7 +1627,7 @@ function App() {
               <input className="player-seek" aria-label="Posição do filme" type="range" min="0" max={(pipedSeek ? playing.totalDuration : 0) || playerDuration || playerSeekEnd || 1} step="0.1" value={pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerDuration || playerSeekEnd ? Math.min(playerCurrentTime, playerDuration || playerSeekEnd) : 0} disabled={!pipedSeek && !playerDuration && !playerSeekEnd} onChange={(event) => (pipedSeek ? setSeekDraft(Number(event.target.value)) : setPlayerSeekPosition(event.target.value))} onPointerUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }} onKeyUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }}/>
               <div className="player-control-row">
                 <div className="player-control-group"><button className="player-icon-button" aria-label={playerPlaying ? 'Pausar' : 'Reproduzir'} onClick={togglePlayerPlayback}><Icon name={playerPlaying ? 'pause' : 'play'} size={21}/></button><button className="player-icon-button" aria-label="Recuar 10 segundos" onClick={() => seekPlayer(-10)}><Icon name="skipBack" size={20}/></button><button className="player-icon-button" aria-label="Avançar 10 segundos" onClick={() => seekPlayer(10)}><Icon name="skipForward" size={20}/></button><span className="player-time">{formatPlaybackTime(pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerCurrentTime)} <i>/</i> {pipedSeek ? formatPlaybackTime(playing.totalDuration) : playerDuration ? formatPlaybackTime(playerDuration) : 'AO VIVO'}</span></div>
-                <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/><button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
+                <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/>{!playing?.live && playing?.sourceUrl && <span className="quality-wrap"><button className={`player-icon-button ${qualityMenuOpen ? 'active' : ''}`} aria-label="Qualidade" title="Qualidade" onClick={() => { setQualityMenuOpen((open) => !open); setSubtitleMenuOpen(false); revealPlayerControls(); }}><Icon name="settings" size={20}/></button>{qualityMenuOpen && <div className="quality-menu"><small>QUALIDADE</small>{[['original', 'Original'], ['1080', '1080p'], ['720', '720p']].map(([key, label]) => <button key={key} className={(playing.quality || 'original') === key ? 'active' : ''} onClick={() => changeQuality(key)}>{label}</button>)}</div>}</span>}<button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
               </div>
             </div>
           </div>

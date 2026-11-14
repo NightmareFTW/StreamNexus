@@ -996,6 +996,7 @@ function canPlayDirectly(info) {
 async function prepareAudioStream(value) {
   const live = Boolean(value?.live);
   const startAt = Math.max(0, Number(value?.startAt) || 0);
+  const quality = ['1080', '720'].includes(String(value?.quality)) ? String(value.quality) : '';
   const sourceUrl = live ? validateLiveStreamUrl(value?.url) : validateRealDebridStreamUrl(value?.url);
   const liveMeta = live ? liveStreamMeta.get(sourceUrl) || {} : {};
   const inputArgs = [
@@ -1012,7 +1013,7 @@ async function prepareAudioStream(value) {
   }
   const id = randomUUID();
   const token = randomUUID();
-  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, transcodeVideo: Boolean(value?.transcodeVideo) || Boolean(probed && (probed.tenBit || (probed.video && !['h264', 'vp9', 'av1', 'vp8', 'hevc'].includes(probed.video)))), videoCodec: '', error: '' };
+  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, quality, transcodeVideo: Boolean(value?.transcodeVideo) || Boolean(quality) || Boolean(probed && (probed.tenBit || (probed.video && !['h264', 'vp9', 'av1', 'vp8', 'hevc'].includes(probed.video)))), videoCodec: '', error: '' };
   stream.server = http.createServer((request, response) => {
     if (request.url !== `/${token}`) {
       response.writeHead(404).end();
@@ -1032,7 +1033,7 @@ async function prepareAudioStream(value) {
   function startFfmpeg(_request, response) {
     // HEVC em MP4 só é reconhecido pelo Chromium com a tag hvc1 (o FFmpeg usa hev1 por defeito).
     const videoArgs = stream.transcodeVideo
-      ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-vf', "scale=-2:'min(1080,ih)'"]
+      ? ['-c:v', 'libx264', '-preset', stream.quality === '720' ? 'superfast' : 'veryfast', ...(stream.quality === '720' ? ['-maxrate', '3M', '-bufsize', '6M', '-crf', '26'] : stream.quality === '1080' ? ['-maxrate', '8M', '-bufsize', '16M', '-crf', '23'] : ['-crf', '23']), '-pix_fmt', 'yuv420p', '-vf', `scale=-2:'min(${stream.quality === '720' ? 720 : 1080},ih)'`]
       : ['-c:v', 'copy', ...(stream.videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
     const args = [
       '-hide_banner', '-loglevel', 'error', ...inputArgs, ...(startAt ? ['-ss', String(startAt)] : []), '-i', sourceUrl,
@@ -1082,7 +1083,7 @@ async function prepareAudioStream(value) {
   });
   audioStreams.set(id, stream);
   const { port } = stream.server.address();
-  return { id, url: `http://127.0.0.1:${port}/${token}`, ...(probed?.duration ? { totalDuration: probed.duration } : {}) };
+  return { id, url: `http://127.0.0.1:${port}/${token}`, transcoded: stream.transcodeVideo, ...(probed?.duration ? { totalDuration: probed.duration } : {}) };
 }
 
 // ---- Reprodução HLS direta: proxy local que acrescenta os cabeçalhos exigidos e o CORS ----
