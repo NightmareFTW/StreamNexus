@@ -190,9 +190,11 @@ export function BooksCollectionView({ view, reading, saved, onOpen, onSave }) {
 
 export function BookSourcesPanel({ state, onOpen }) {
   const data = state.data;
-  const library = data?.openLibrary;
+  const library = ['public', 'borrowable'].includes(data?.openLibrary?.access) ? data.openLibrary : null;
   const gutenberg = data?.gutenberg;
-  const nothing = state.status === 'ready' && !gutenberg && (!library || library.access === 'no_ebook');
+  const archive = data?.archive;
+  const librivox = data?.librivox;
+  const nothing = state.status === 'ready' && !gutenberg && !archive && !librivox && !library;
   return <section className="easy-sources">
     <span className="eyebrow">LER OU OBTER</span>
     {state.status === 'loading' && <p className="rd-empty-text"><span className="spinner"></span> A procurar fontes legais…</p>}
@@ -200,8 +202,12 @@ export function BookSourcesPanel({ state, onOpen }) {
     {state.status === 'ready' && <div className="easy-list">
       {gutenberg && <div className="easy-row"><span><strong>Project Gutenberg</strong><small>Domínio público · gratuito · {gutenberg.title}</small></span>
         <div>{gutenberg.epub && <button className="button button-primary button-sm" onClick={() => onOpen(gutenberg.epub)}>EPUB</button>}{gutenberg.mobi && <button className="button button-quiet button-sm" onClick={() => onOpen(gutenberg.mobi)}>Kindle</button>}{gutenberg.html && <button className="button button-quiet button-sm" onClick={() => onOpen(gutenberg.html)}>Ler online</button>}</div></div>}
-      {library && library.access !== 'no_ebook' && <div className="easy-row"><span><strong>Internet Archive · Open Library</strong><small>{library.access === 'public' ? 'Leitura e descarga gratuitas' : 'Empréstimo gratuito (precisa de conta Internet Archive)'}</small></span>
+      {archive && <div className="easy-row"><span><strong>Internet Archive</strong><small>Acesso livre · {archive.title}</small></span>
+        <div><button className="button button-primary button-sm" onClick={() => onOpen(archive.url)}>Ler / descarregar</button></div></div>}
+      {library && <div className="easy-row"><span><strong>Open Library</strong><small>{library.access === 'public' ? 'Leitura e descarga gratuitas' : 'Empréstimo gratuito (precisa de conta Internet Archive)'}</small></span>
         <div>{library.archiveUrl && <button className="button button-primary button-sm" onClick={() => onOpen(library.archiveUrl)}>{library.access === 'public' ? 'Ler / descarregar' : 'Pedir emprestado'}</button>}<button className="button button-quiet button-sm" onClick={() => onOpen(library.url)}>Ver ficha</button></div></div>}
+      {librivox && <div className="easy-row"><span><strong>LibriVox · audiolivro</strong><small>Voluntários · domínio público{librivox.time ? ` · ${librivox.time}` : ''}</small></span>
+        <div><button className="button button-primary button-sm" onClick={() => onOpen(librivox.url)}>Ouvir / descarregar</button></div></div>}
       {nothing && <p className="rd-empty-text">Não há versão digital gratuita e legal deste livro. Podes tentar a pesquisa nos indexadores abaixo.</p>}
     </div>}
   </section>;

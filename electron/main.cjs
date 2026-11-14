@@ -17,7 +17,7 @@ const TMDB_API = 'https://api.themoviedb.org/3';
 const OPENSUBTITLES_API = 'https://api.opensubtitles.com/api/v1';
 const SESSION_FILE = 'real-debrid-session.bin';
 const INTEGRATIONS_FILE = 'integrations.bin';
-const DEV_URL = 'http://127.0.0.1:5173';
+const DEV_URL = process.env.STREAMNEXUS_DEV_URL || 'http://127.0.0.1:5173';
 const releaseCache = new Map();
 
 let mainWindow;
@@ -238,8 +238,8 @@ const DISCOVERY_TTL = 10 * 60 * 1000;
 const discoveryCache = new Map();
 const MEDIA_ACCENTS = ['#8f71fc', '#c28d5d', '#68727c', '#b44c7c', '#627c89', '#759065', '#9d454d', '#729caa'];
 
-async function fetchPublicJson(url) {
-  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' } });
+async function fetchPublicJson(url, timeoutMs = 20000) {
+  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' }, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`O serviço respondeu com erro ${response.status}.`);
   return response.json();
 }
@@ -469,7 +469,7 @@ function parseM3u(text) {
     if (line.startsWith('#EXTINF')) {
       const attrs = {};
       line.replace(/([\w-]+)="([^"]*)"/g, (_match, key, value) => { attrs[key] = value; return ''; });
-      current = { name: line.slice(line.lastIndexOf(',') + 1).trim(), group: attrs['group-title'] || '', tvgId: attrs['tvg-id'] || '', logo: attrs['tvg-logo'] || '', userAgent: '', referrer: '', origin: '' };
+      current = { name: line.slice(line.lastIndexOf(',') + 1).trim(), group: attrs['group-title'] || '', tvgId: attrs['tvg-id'] || '', country: attrs['tvg-country'] || '', logo: attrs['tvg-logo'] || '', userAgent: '', referrer: '', origin: '' };
     } else if (current && line.startsWith('#EXTVLCOPT:')) {
       const [key, ...rest] = line.slice(11).split('=');
       const value = rest.join('=').replace(/^"|"$/g, '');
@@ -549,27 +549,37 @@ async function loadLiveTv() {
         if (!byCountry.has(channel.country)) byCountry.set(channel.country, []);
         byCountry.get(channel.country).push(item);
       }
-      try {
-        const playlist = await (await fetch('https://raw.githubusercontent.com/LITUATUI/M3UPT/main/M3U/M3UPT.m3u', { headers: { 'User-Agent': 'StreamNexus/0.1' } })).text();
-        for (const entry of parseM3u(playlist)) {
-          if (entry.group !== 'TV') continue;
-          const code = String(entry.tvgId.split('.').pop() || '').toUpperCase();
-          if (code.length !== 2 || !countryInfo.has(code)) continue;
-          if (!byCountry.has(code)) byCountry.set(code, []);
-          const list = byCountry.get(code);
-          const key = normalizeChannelName(entry.name);
-          if (!key) continue;
-          liveStreamMeta.set(entry.url, { referrer: entry.referrer, userAgent: entry.userAgent, origin: entry.origin });
-          const stream = { url: entry.url, quality: '' };
-          const existing = list.find((item) => normalizeChannelName(item.title) === key);
-          if (existing) { existing.streams = [stream, ...existing.streams].slice(0, 5); continue; }
-          const label = guessTvCategory(entry.name);
-          list.push({
-            id: `live-m3upt-${code}-${key}`, type: 'Canal', title: entry.name, original: entry.name, creator: countryInfo.get(code).name, year: '', rating: '',
-            genre: label, genres: [label], runtime: 'Ao vivo', poster: entry.logo, posters: entry.logo ? [entry.logo] : [], backdrop: entry.logo, description: `Canal de televisão · ${countryInfo.get(code).name}`, accent: '#b30d1b', streams: [stream],
-          });
+      const addEntry = (entry, code, priority) => {
+        if (code.length !== 2 || !countryInfo.has(code)) return;
+        const name = entry.name.replace(/\s*[ⒼⓈⓎⓅ]+\s*$/u, '').trim();
+        const key = normalizeChannelName(name);
+        if (!key || !/^https?:/i.test(entry.url) || /youtube\.com|youtu\.be/i.test(entry.url)) return;
+        if (!byCountry.has(code)) byCountry.set(code, []);
+        const list = byCountry.get(code);
+        liveStreamMeta.set(entry.url, { referrer: entry.referrer, userAgent: entry.userAgent, origin: entry.origin });
+        const stream = { url: entry.url, quality: '' };
+        const existing = list.find((item) => normalizeChannelName(item.title) === key);
+        if (existing) {
+          if (!existing.streams.some((candidate) => candidate.url === entry.url)) existing.streams = (priority ? [stream, ...existing.streams] : [...existing.streams, stream]).slice(0, 6);
+          return;
         }
-      } catch { /* a lista complementar é opcional */ }
+        const label = guessTvCategory(name);
+        list.push({
+          id: `live-ext-${code}-${key}`, type: 'Canal', title: name, original: name, creator: countryInfo.get(code).name, year: '', rating: '',
+          genre: label, genres: [label], runtime: 'Ao vivo', poster: entry.logo, posters: entry.logo ? [entry.logo] : [], backdrop: entry.logo,
+          description: `Canal de televisão · ${countryInfo.get(code).name}`, accent: '#b30d1b', streams: [stream],
+        });
+      };
+      const playlists = [
+        { url: 'https://raw.githubusercontent.com/LITUATUI/M3UPT/main/M3U/M3UPT.m3u', priority: true, accept: (entry) => entry.group === 'TV', code: (entry) => entry.tvgId.split('.').pop() },
+        { url: 'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8', priority: false, accept: () => true, code: (entry) => entry.country || entry.tvgId.split('.').pop() },
+      ];
+      for (const source of playlists) {
+        try {
+          const response = await fetch(source.url, { headers: { 'User-Agent': 'StreamNexus/0.1' } });
+          for (const entry of parseM3u(await response.text())) if (source.accept(entry)) addEntry(entry, String(source.code(entry) || '').toUpperCase(), source.priority);
+        } catch { /* as listas complementares são opcionais */ }
+      }
       for (const list of byCountry.values()) list.sort((a, b) => a.title.localeCompare(b.title, 'pt-PT'));
       liveTvCache = { at: Date.now(), byCountry, countryInfo };
       return liveTvCache;
@@ -755,7 +765,7 @@ async function fetchBookSources(value = {}) {
   const key = String(value.key || '').replace(/[^A-Za-z0-9]/g, '');
   const title = String(value.title || '').slice(0, 200);
   const author = String(value.author || '').slice(0, 120);
-  const out = { openLibrary: null, gutenberg: null };
+  const out = { openLibrary: null, gutenberg: null, librivox: null, archive: null };
   await Promise.allSettled([
     (async () => {
       if (!key) return;
@@ -764,7 +774,7 @@ async function fetchBookSources(value = {}) {
       out.openLibrary = { access: doc?.ebook_access || 'no_ebook', url: `https://openlibrary.org/works/${key}`, archiveUrl: doc?.ia?.[0] ? `https://archive.org/details/${doc.ia[0]}` : '' };
     })(),
     (async () => {
-      const data = await fetchPublicJson(`https://gutendex.com/books/?search=${encodeURIComponent([title, author].filter(Boolean).join(' '))}`);
+      const data = await fetchPublicJson(`https://gutendex.com/books/?search=${encodeURIComponent([title, author].filter(Boolean).join(' '))}`, 8000);
       const wanted = bookNorm(title);
       const surname = bookNorm(author).split(' ').pop();
       const match = (data.results || []).find((entry) => {
@@ -778,11 +788,24 @@ async function fetchBookSources(value = {}) {
         out.gutenberg = { title: match.title, epub: formats['application/epub+zip'] || '', mobi: formats['application/x-mobipocket-ebook'] || '', html: formats['text/html'] || '', page: `https://www.gutenberg.org/ebooks/${match.id}` };
       }
     })(),
+    (async () => {
+      const surname = bookNorm(author).split(' ').pop();
+      const data = await fetchPublicJson(`https://librivox.org/api/feed/audiobooks/?title=${encodeURIComponent(`^${title}`)}&format=json&limit=5`);
+      const match = (data.books || []).find((entry) => !surname || (entry.authors || []).some((person) => bookNorm(person.last_name).includes(surname)));
+      if (match) out.librivox = { title: match.title, url: match.url_librivox, time: match.totaltime || '' };
+    })(),
+    (async () => {
+      const surname = bookNorm(author).split(' ').pop();
+      const clauses = [`title:("${title.replace(/["\\()]/g, ' ')}")`, surname ? `creator:(${surname})` : '', 'mediatype:texts', 'NOT access-restricted-item:true'].filter(Boolean).join(' AND ');
+      const data = await fetchPublicJson(`https://archive.org/advancedsearch.php?q=${encodeURIComponent(clauses)}&fl[]=identifier&fl[]=title&rows=2&sort[]=${encodeURIComponent('downloads desc')}&output=json`);
+      const doc = data.response?.docs?.[0];
+      if (doc) out.archive = { title: doc.title, url: `https://archive.org/details/${doc.identifier}` };
+    })(),
   ]);
   return out;
 }
 
-const LINK_HOSTS = ['gutenberg.org', 'archive.org', 'openlibrary.org', 'open.spotify.com', 'music.apple.com'];
+const LINK_HOSTS = ['gutenberg.org', 'archive.org', 'openlibrary.org', 'librivox.org', 'open.spotify.com', 'music.apple.com', 'audius.co'];
 async function openAllowedLink(value = {}) {
   let url;
   try { url = new URL(String(value.url || '')); } catch { throw new Error('Endereço inválido.'); }
@@ -790,6 +813,91 @@ async function openAllowedLink(value = {}) {
   if (url.protocol !== 'https:' || !LINK_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) throw new Error('Este endereço não é permitido.');
   await shell.openExternal(url.toString());
   return { opened: true };
+}
+
+// ---- Logo de último recurso: imagem principal do artigo da Wikipédia do canal ----
+const channelLogoCache = new Map();
+async function fetchChannelLogo(value = {}) {
+  const name = String(value.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!name) return '';
+  const key = name.toLowerCase();
+  if (channelLogoCache.has(key)) return channelLogoCache.get(key);
+  const wanted = normalizeChannelName(name);
+  const imageOf = async (lang, pageKey) => {
+    const summary = await fetchPublicJson(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(pageKey)}`);
+    if (summary.type !== 'standard' || !/televis|television|canal|channel|rede|emissora|network|\bTV\b/i.test(`${summary.description || ''} ${summary.extract || ''}`)) return '';
+    const image = summary.thumbnail?.source || summary.originalimage?.source || '';
+    return /^https:\/\/(upload|thumb)\.wikimedia\.org\//i.test(image) ? image : '';
+  };
+  let found = '';
+  for (const lang of ['pt', 'en']) {
+    try { found = await imageOf(lang, name.replace(/ /g, '_')); } catch { found = ''; }
+    if (!found) {
+      try {
+        const search = await fetchPublicJson(`https://${lang}.wikipedia.org/w/rest.php/v1/search/title?q=${encodeURIComponent(name)}&limit=4`);
+        for (const page of search.pages || []) {
+          const title = normalizeChannelName(page.title);
+          if (!wanted || !(title.includes(wanted) || wanted.includes(title))) continue;
+          found = await imageOf(lang, page.key);
+          if (found) break;
+        }
+      } catch { found = ''; }
+    }
+    if (found) break;
+  }
+  channelLogoCache.set(key, found);
+  return found;
+}
+
+// ---- Música gratuita e completa: Internet Archive e Audius ----
+const AUDIO_FORMATS = ['VBR MP3', 'MP3', '128Kbps MP3', '64Kbps MP3', 'Ogg Vorbis'];
+async function searchArchiveAudio(artist, album) {
+  const quote = (text) => String(text || '').replace(/["\\()]/g, ' ').trim();
+  const clauses = [album ? `title:("${quote(album)}")` : '', artist ? `creator:("${quote(artist)}")` : ''].filter(Boolean).join(' AND ');
+  const query = `${clauses} AND mediatype:audio`;
+  const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=3&sort[]=${encodeURIComponent('downloads desc')}&output=json`;
+  const data = await fetchPublicJson(url);
+  const groups = [];
+  for (const doc of data.response?.docs || []) {
+    try {
+      const meta = await fetchPublicJson(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
+      const files = (meta.files || []).filter((file) => AUDIO_FORMATS.includes(file.format));
+      const best = AUDIO_FORMATS.find((format) => files.some((file) => file.format === format));
+      const tracks = files.filter((file) => file.format === best).slice(0, 30).map((file) => ({ title: file.title || file.name.replace(/\.[^.]+$/, ''), url: `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${file.name.split('/').map(encodeURIComponent).join('/')}`, duration: Number(file.length) || 0 }));
+      if (tracks.length) groups.push({ source: 'Internet Archive', title: doc.title, creator: [].concat(doc.creator || '').join(', '), pageUrl: `https://archive.org/details/${doc.identifier}`, tracks });
+    } catch { /* ignora itens sem ficheiros */ }
+  }
+  return groups;
+}
+
+async function searchAudius(artist, album) {
+  const query = [artist, album].filter(Boolean).join(' ').slice(0, 120);
+  const data = await fetchPublicJson(`https://api.audius.co/v1/tracks/search?query=${encodeURIComponent(query)}&limit=8&app_name=StreamNexus`);
+  const tracks = (data.data || []).filter((track) => track.id && track.title).map((track) => ({ title: `${track.title} · ${track.user?.name || ''}`.trim(), url: `https://api.audius.co/v1/tracks/${track.id}/stream?app_name=StreamNexus`, duration: Number(track.duration) || 0 }));
+  return tracks.length ? [{ source: 'Audius', title: 'Faixas encontradas no Audius', creator: '', pageUrl: '', tracks }] : [];
+}
+
+async function fetchFreeMusic(value = {}) {
+  const artist = String(value.artist || '').slice(0, 100);
+  const album = String(value.album || '').slice(0, 120);
+  const settled = await Promise.allSettled([searchArchiveAudio(artist, album), searchArchiveAudio(artist, ''), searchAudius(artist, album)]);
+  const words = (text) => bookNorm(text).split(' ').filter((word) => word.length > 2 && !['the', 'and', 'del', 'les', 'los', 'various', 'artists'].includes(word));
+  const wanted = words(artist).length ? words(artist) : words(album);
+  const relevant = (text) => { const haystack = bookNorm(text); return wanted.some((word) => haystack.includes(word)); };
+  const groups = [];
+  const seen = new Set();
+  for (const entry of settled) {
+    if (entry.status !== 'fulfilled') continue;
+    for (const group of entry.value) {
+      const key = `${group.source}|${group.pageUrl || group.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (group.source === 'Audius') group.tracks = group.tracks.filter((track) => relevant(track.title));
+      else if (!relevant(`${group.title} ${group.creator}`)) continue;
+      if (group.tracks.length) groups.push(group);
+    }
+  }
+  return groups.slice(0, 6);
 }
 
 async function fetchDiscovery({ kind } = {}) {
@@ -1344,7 +1452,7 @@ function configureContentSecurityPolicy() {
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
-    "frame-src https://www.youtube-nocookie.com https://embed.redtube.com https://www.pornhub.com https://www.eporner.com https://open.spotify.com https://embed.music.apple.com",
+    "frame-src https://www.youtube-nocookie.com https://*.redtube.com https://*.pornhub.com https://*.eporner.com https://open.spotify.com https://embed.music.apple.com",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",
@@ -1381,6 +1489,8 @@ function registerIpc() {
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
   ipcMain.handle('tv:health', resultHandler(fetchLiveHealth));
+  ipcMain.handle('tv:logo', resultHandler(fetchChannelLogo));
+  ipcMain.handle('music:free', resultHandler(fetchFreeMusic));
   ipcMain.handle('books:sources', resultHandler(fetchBookSources));
   ipcMain.handle('app:open-link', resultHandler(openAllowedLink));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));

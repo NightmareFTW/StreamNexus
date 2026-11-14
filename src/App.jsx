@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
+import { FreeMusicPanel } from './Music.jsx';
 import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
@@ -1049,6 +1050,7 @@ function App() {
 
   const [booksView, setBooksView] = useState('dashboard');
   const [bookSources, setBookSources] = useState({ id: '', status: 'idle', data: null });
+  const [musicSources, setMusicSources] = useState({ id: '', status: 'idle', data: null });
   const showDiscover = activePage !== 'books' || booksView === 'discover';
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
@@ -1127,6 +1129,17 @@ function App() {
       .catch(() => { if (!cancelled) setBookSources({ id: book.id, status: 'error', data: null }); });
     return () => { cancelled = true; };
   }, [modal?.type, modal?.id]);
+  useEffect(() => {
+    if (modal?.type !== 'details' || selectedTitle?.type !== 'Álbum' || !window.streamnexus?.isDesktop) return undefined;
+    const album = selectedTitle;
+    setMusicSources({ id: album.id, status: 'loading', data: null });
+    let cancelled = false;
+    window.streamnexus.fetchFreeMusic({ artist: (album.creator || '').split(',')[0], album: String(album.title || '').replace(/\s*[(\[].*$/, '') })
+      .then((data) => { if (!cancelled) setMusicSources({ id: album.id, status: 'ready', data }); })
+      .catch(() => { if (!cancelled) setMusicSources({ id: album.id, status: 'error', data: null }); });
+    return () => { cancelled = true; };
+  }, [modal?.type, modal?.id]);
+
   const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
   const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
@@ -1455,6 +1468,7 @@ function App() {
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
             {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
+            {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
           </div>

@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   fetchLiveCountries: () => invokeRequest('tv:countries'),
   fetchLiveChannels: (country) => invokeRequest('tv:channels', { country }),
   fetchAdultVideos: (term, orientation) => invokeRequest('adult:videos', { term, orientation }),
+  fetchChannelLogo: (value) => invokeRequest('tv:logo', value),
+  fetchFreeMusic: (value) => invokeRequest('music:free', value),
   fetchLiveHealth: (country) => invokeRequest('tv:health', { country }),
   fetchBookSources: (value) => invokeRequest('books:sources', value),
   openLink: (url) => invokeRequest('app:open-link', { url }),

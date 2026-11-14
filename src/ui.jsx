@@ -128,10 +128,11 @@ export function ScrollRow({ className = '', children, ...props }) {
   >{children}</div>;
 }
 
-export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave = false }) {
+export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave = false, onMissingLogo }) {
   const sources = item.posters?.length ? item.posters : [item.poster];
   const [imageIndex, setImageIndex] = useState(0);
   const imageFailed = imageIndex >= sources.length || !sources[imageIndex];
+  useEffect(() => { if (imageFailed && onMissingLogo) onMissingLogo(item); }, [imageFailed]);
   return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} ${item.offline ? 'is-offline' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
     {rank && <span className="poster-rank">{rank}</span>}
     <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>

@@ -837,3 +837,22 @@ html, body { background: #070707; }
 .easy-row strong { color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; }
 .easy-row small { color: #8d8d95; font-size: 11px; }
 .easy-row > div { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+
+/* Música gratuita */
+.free-player { display: grid; gap: 8px; padding: 10px 12px; border-radius: 7px; background: rgba(255,255,255,.04); }
+.free-player > span { display: grid; gap: 2px; min-height: 30px; }
+.free-player strong { color: #f1f1f4; font-size: 13px; }
+.free-player small { color: #8d8d95; font-size: 11px; }
+.free-player audio { width: 100%; height: 34px; }
+.free-group { display: grid; gap: 6px; padding: 10px 12px; border-radius: 7px; background: rgba(255,255,255,.03); }
+.free-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.free-group-head > span { display: grid; gap: 2px; min-width: 0; }
+.free-group-head strong { overflow: hidden; color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.free-group-head small { color: #8d8d95; font-size: 11px; }
+.free-group ol { display: grid; gap: 2px; max-height: 190px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.free-group li button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: #c4c4cb; font-size: 12px; text-align: left; cursor: pointer; }
+.free-group li button:hover { background: rgba(255,255,255,.06); color: #fff; }
+.free-group li button.active { background: rgba(229,9,20,.18); color: #fff; }
+.free-group li button span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.free-group li button em { color: #8d8d95; font-size: 10px; font-style: normal; }

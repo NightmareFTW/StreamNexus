@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 
 export function TvModeTabs({ mode, onMode }) {
@@ -10,14 +10,23 @@ export function TvModeTabs({ mode, onMode }) {
 export function LiveTvPage({ mode, onMode, countries, country, onCountry, state, health, showOffline, onShowOffline, onPlay, onRetry }) {
   const [category, setCategory] = useState('Todos');
   const [filter, setFilter] = useState('');
+  const [resolvedLogos, setResolvedLogos] = useState({});
+  const requestedLogos = useRef(new Set());
+  const handleMissingLogo = useCallback((item) => {
+    if (requestedLogos.current.has(item.id)) return;
+    requestedLogos.current.add(item.id);
+    window.streamnexus?.fetchChannelLogo?.({ name: item.title, country: item.creator }).then((url) => { if (url) setResolvedLogos((current) => ({ ...current, [item.id]: url })); }).catch(() => {});
+  }, []);
   useEffect(() => { setCategory('Todos'); setFilter(''); }, [country]);
 
-  const decorated = useMemo(() => state.items.map((item) => {
+  const decorated = useMemo(() => state.items.map((original) => {
+    const extraLogo = resolvedLogos[original.id];
+    const item = extraLogo ? { ...original, posters: [...(original.posters || []), extraLogo] } : original;
     const result = health?.results?.[item.id];
     if (!result) return item;
     const streams = result.best ? [...item.streams].sort((a, b) => (a.url === result.best ? -1 : b.url === result.best ? 1 : 0)) : item.streams;
     return { ...item, streams, offline: result.online === false };
-  }), [state.items, health?.results]);
+  }), [state.items, health?.results, resolvedLogos]);
   const offlineCount = decorated.filter((item) => item.offline).length;
   const items = useMemo(() => {
     const online = decorated.filter((item) => !item.offline);
@@ -71,8 +80,8 @@ export function LiveTvPage({ mode, onMode, countries, country, onCountry, state,
     {sections.length > 0
       ? sections.map(({ label, list }) => <section className="content-section" key={label}>
           <div className="section-heading"><div><span className="eyebrow">{list.length} {list.length === 1 ? 'CANAL' : 'CANAIS'}</span><h2>{label}</h2></div>{list.length > 60 && <button className="view-all" onClick={() => setCategory(label)}>Ver todos <Icon name="chevron" size={14}/></button>}</div>
-          <div className="channel-grid">{list.slice(0, 60).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>
+          <div className="channel-grid">{list.slice(0, 60).map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onMissingLogo={handleMissingLogo} onOpen={() => onPlay(item)}/>)}</div>
         </section>)
-      : visible.length > 0 && <div className="channel-grid">{visible.map((item, index) => <PosterCard key={item.id} item={item} index={index % 12} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>}
+      : visible.length > 0 && <div className="channel-grid">{visible.map((item, index) => <PosterCard key={item.id} item={item} index={index % 12} saved={false} hideSave onMissingLogo={handleMissingLogo} onOpen={() => onPlay(item)}/>)}</div>}
   </section>;
 }
