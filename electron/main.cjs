@@ -174,7 +174,7 @@ function normalizeTmdbItem(item, baseUrl, sizes) {
   };
 }
 
-async function tmdbImageSettings(apiKey) {
+async function tmdbImageSettingsRaw(apiKey) {
   const config = await tmdbRequest('/configuration', apiKey);
   const baseUrl = config.images?.secure_base_url || 'https://image.tmdb.org/t/p/';
   const posterSizes = config.images?.poster_sizes || [];
@@ -260,7 +260,7 @@ async function fetchTvDiscovery() {
   const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
   return Promise.all(TV_SHELVES.map(async (shelf) => {
     const data = await tmdbRequest(shelf.path, tmdbApiKey);
-    return { eyebrow: shelf.eyebrow, title: shelf.title, items: (data.results || []).map((item) => normalizeTmdbItem({ ...item, media_type: 'tv', title: undefined }, baseUrl, sizes)) };
+    return { eyebrow: shelf.eyebrow, title: shelf.title, feedId: shelf.path.startsWith('/tv/airing_today') ? 'tmdb:tv:list:airing_today' : `tmdb:tv:genre:${/with_genres=(\d+)/.exec(shelf.path)?.[1]}:popularity.desc`, cursor: 2, hasMore: true, items: (data.results || []).map((item) => normalizeTmdbItem({ ...item, media_type: 'tv', title: undefined }, baseUrl, sizes)) };
   }));
 }
 
@@ -366,18 +366,13 @@ async function testSpotify(value = {}) {
 
 async function fetchMusicDiscovery() {
   const { spotifyClientId, spotifyClientSecret } = await readIntegrations();
-  if (spotifyClientId && spotifyClientSecret) {
-    try {
-      const rows = await fetchSpotifyMusic(spotifyClientId, spotifyClientSecret);
-      if (rows.some((row) => row.items.length)) return rows;
-    } catch { /* usa o iTunes como alternativa */ }
-  }
-  return Promise.all(MUSIC_SHELVES.map(async (shelf) => {
-    const params = new URLSearchParams({ term: shelf.term, media: 'music', entity: 'album', country: 'PT', limit: '30' });
-    const data = await fetchPublicJson(`https://itunes.apple.com/search?${params}`);
-    const items = (data.results || []).filter((album) => album.collectionId && album.collectionName && album.artworkUrl100).map(normalizeAlbum);
-    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+  const defs = [...(spotifyClientId && spotifyClientSecret ? [{ eyebrow: 'ACABADOS DE SAIR', title: 'Novos lançamentos', term: 'new-releases' }] : []), ...MUSIC_SHELVES];
+  const rows = await Promise.all(defs.map(async (shelf) => {
+    const page = await musicPage(shelf.term, 0).catch(() => ({ items: [], cursor: 0, hasMore: false }));
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items: page.items, feedId: `music:${shelf.term}`, cursor: page.cursor, hasMore: page.hasMore };
   }));
+  if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível obter álbuns agora. Tenta novamente daqui a pouco.');
+  return rows;
 }
 
 const BOOK_SHELVES = [
@@ -407,9 +402,9 @@ function normalizeBook(work, shelf, index) {
 
 async function fetchBooksDiscovery() {
   return Promise.all(BOOK_SHELVES.map(async (shelf) => {
-    const data = await fetchPublicJson(shelf.url);
-    const items = (data.works || []).filter((work) => work.title && (work.cover_id || work.cover_i)).map((work, index) => normalizeBook(work, shelf, index));
-    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+    const subject = /\/subjects\/([^.]+)\.json/.exec(shelf.url)?.[1] || 'trending';
+    const page = await bookPage(subject, 0, shelf.genre).catch(() => ({ items: [], cursor: 0, hasMore: false }));
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items: page.items, feedId: `books:${subject}`, cursor: page.cursor, hasMore: page.hasMore };
   }));
 }
 
@@ -427,7 +422,7 @@ async function fetchAdultDiscovery() {
   const { tmdbApiKey } = await readIntegrations();
   if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações para ver este catálogo.');
   const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
-  const rows = await Promise.all(ADULT_SHELVES.map(async (shelf) => {
+  const rows = await Promise.all(ADULT_SHELVES.map(async (shelf, shelfIndex) => {
     const ids = new Set();
     for (const keyword of shelf.keywords) {
       try {
@@ -435,10 +430,10 @@ async function fetchAdultDiscovery() {
         (found.results || []).slice(0, 2).forEach((entry) => ids.add(entry.id));
       } catch { /* ignora palavras-chave sem resultados */ }
     }
-    if (!ids.size) return { eyebrow: shelf.eyebrow, title: shelf.title, items: [] };
+    if (!ids.size) return { eyebrow: shelf.eyebrow, title: shelf.title, items: [], feedId: `adult:${shelfIndex}`, cursor: 2, hasMore: false };
     const data = await tmdbRequest(`/discover/movie?language=pt-PT&include_adult=true&sort_by=popularity.desc&with_keywords=${[...ids].join('|')}`, tmdbApiKey);
     const items = (data.results || []).filter((item) => item.poster_path).map((item) => ({ ...normalizeTmdbItem({ ...item, media_type: 'movie' }, baseUrl, sizes), adult: true, genre: shelf.title, genres: [shelf.title] }));
-    return { eyebrow: shelf.eyebrow, title: shelf.title, items };
+    return { eyebrow: shelf.eyebrow, title: shelf.title, items, feedId: `adult:${shelfIndex}`, cursor: 2, hasMore: true };
   }));
   if (!rows.some((row) => row.items.length)) throw new Error('O TMDB não devolveu títulos para esta categoria.');
   return rows;
@@ -620,7 +615,7 @@ const ADULT_ROWS = [
 ];
 
 async function fetchAdultJson(url) {
-  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': ADULT_UA } });
+  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': ADULT_UA }, signal: AbortSignal.timeout(12000) });
   if (!response.ok) throw new Error(`A fonte respondeu com erro ${response.status}.`);
   return response.json();
 }
@@ -641,24 +636,24 @@ const ADULT_ORIENTATIONS = {
   trans: { rt: 'Transgender', ph: 'transgender', ep: '0', epTerm: 'trans' },
 };
 
-async function fetchRedtubeVideos({ ordering, period }, term, orientation) {
+async function fetchRedtubeVideos({ ordering, period }, term, orientation, page = 1) {
   const category = ADULT_ORIENTATIONS[orientation]?.rt;
-  const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: '1', ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
+  const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: String(page), ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://api.redtube.com/?${params}`);
   return (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
 }
 
-async function fetchPornhubVideos({ ordering, period }, term, orientation) {
+async function fetchPornhubVideos({ ordering, period }, term, orientation, page = 1) {
   const category = ADULT_ORIENTATIONS[orientation]?.ph;
-  const params = new URLSearchParams({ ordering, thumbsize: 'large', page: '1', ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
+  const params = new URLSearchParams({ ordering, thumbsize: 'large', page: String(page), ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
   return (data.videos || []).filter((video) => orientation !== 'straight' || video.segment !== 'gay').map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
 }
 
-async function fetchEpornerVideos(order, term, orientation) {
+async function fetchEpornerVideos(order, term, orientation, page = 1) {
   const config = ADULT_ORIENTATIONS[orientation] || {};
   const query = [config.epTerm, term].filter(Boolean).join(' ') || 'all';
-  const params = new URLSearchParams({ query, per_page: '30', page: '1', thumbsize: 'big', order, gay: config.ep || '0', lq: '0', format: 'json' });
+  const params = new URLSearchParams({ query, per_page: '30', page: String(page), thumbsize: 'big', order, gay: config.ep || '0', lq: '0', format: 'json' });
   const data = await fetchAdultJson(`https://www.eporner.com/api/v2/video/search/?${params}`);
   return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()))).filter((item) => item.poster && item.embedUrl);
 }
@@ -698,7 +693,7 @@ async function fetchAdultVideos(value = {}) {
     return { spec, lists: settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : [])) };
   }));
   const used = new Set();
-  const rows = fetched.map(({ spec, lists }) => ({ eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(lists, used) }));
+  const rows = fetched.map(({ spec, lists }, rowIndex) => ({ eyebrow: spec.eyebrow, title: spec.title, items: interleaveAdult(lists, used), feedId: `adultv:row:${rowIndex}`, cursor: 2, hasMore: true }));
   if (!rows.some((row) => row.items.length)) throw new Error('Não foi possível obter vídeos das fontes (RedTube, Pornhub e Eporner) para esta seleção. Tenta outra categoria.');
   adultVideoCache.set(cacheKey, { at: Date.now(), rows });
   return rows;
@@ -898,6 +893,309 @@ async function fetchFreeMusic(value = {}) {
     }
   }
   return groups.slice(0, 6);
+}
+
+// ---- Feeds infinitos: páginas seguintes por prateleira, por categoria e prateleiras extra ----
+const FEED_TTL = 10 * 60 * 1000;
+const feedMemo = new Map();
+async function memo(key, loader, ttl = FEED_TTL) {
+  const hit = feedMemo.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.value;
+  const value = await loader();
+  feedMemo.set(key, { at: Date.now(), value });
+  if (feedMemo.size > 500) feedMemo.delete(feedMemo.keys().next().value);
+  return value;
+}
+const feedSlug = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+const tmdbConfigCache = new Map();
+async function tmdbImageSettings(apiKey) {
+  const cached = tmdbConfigCache.get(apiKey);
+  if (cached && Date.now() - cached.at < 3600000) return cached.value;
+  const value = await tmdbImageSettingsRaw(apiKey);
+  tmdbConfigCache.set(apiKey, { at: Date.now(), value });
+  return value;
+}
+
+// --- TMDB (filmes, séries, programas de TV) ---
+const TMDB_LIST_PATHS = {
+  movie: { trending: '/trending/movie/week', popular: '/movie/popular', now_playing: '/movie/now_playing', top_rated: '/movie/top_rated' },
+  tv: { trending: '/trending/tv/week', popular: '/tv/popular', on_the_air: '/tv/on_the_air', top_rated: '/tv/top_rated', airing_today: '/tv/airing_today' },
+};
+const TMDB_GENRE_IDS = {
+  movie: [28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 53, 10752, 37],
+  tv: [10759, 16, 35, 80, 99, 18, 10751, 10762, 9648, 10764, 10765, 10766, 10767, 10768, 37],
+};
+const TMDB_LIST_TITLES = {
+  trending: ['EM ALTA', 'Em alta esta semana'], popular: ['POPULARES', 'Os mais populares'], now_playing: ['NO CINEMA E EM CASA', 'Estreias recentes'],
+  top_rated: ['ESCOLHIDOS PARA TI', 'Mais bem avaliados'], on_the_air: ['NOVOS EPISÓDIOS', 'Séries a acompanhar'], airing_today: ['EM EMISSÃO HOJE', 'Hoje na televisão'],
+};
+const tmdbGenreId = (type, name) => TMDB_GENRE_IDS[type].find((id) => TMDB_GENRES[id] === name) || 0;
+
+function tmdbShelfResource(type, shelfId, page) {
+  const [, , part, first, second] = shelfId.split(':');
+  const language = 'language=pt-PT';
+  const dateKey = type === 'movie' ? 'primary_release_date' : 'first_air_date';
+  if (part === 'list' && TMDB_LIST_PATHS[type][first]) return `${TMDB_LIST_PATHS[type][first]}?${language}&region=PT&page=${page}`;
+  if (part === 'genre') {
+    const sort = ['popularity.desc', 'vote_average.desc'].includes(second) ? second : 'popularity.desc';
+    const votes = sort === 'vote_average.desc' ? `&vote_count.gte=${type === 'movie' ? 400 : 200}` : '';
+    return `/discover/${type}?${language}&with_genres=${Number(first)}&sort_by=${sort}${votes}&page=${page}`;
+  }
+  if (part === 'decade') { const start = Number(first); return `/discover/${type}?${language}&sort_by=popularity.desc&${dateKey}.gte=${start}-01-01&${dateKey}.lte=${start + 9}-12-31&vote_count.gte=100&page=${page}`; }
+  if (part === 'lang') return `/discover/${type}?${language}&with_original_language=${encodeURIComponent(first)}&sort_by=popularity.desc&page=${page}`;
+  throw new Error('Prateleira inválida.');
+}
+
+function tmdbShelfDef(type, shelfId) {
+  const [, , part, first, second] = shelfId.split(':');
+  if (part === 'list') { const [eyebrow, title] = TMDB_LIST_TITLES[first] || ['EM DESTAQUE', 'Em destaque']; return { eyebrow, title }; }
+  if (part === 'genre') { const name = TMDB_GENRES[first] || 'Género'; return second === 'vote_average.desc' ? { eyebrow: 'OS MELHORES', title: `Melhores de ${name}` } : { eyebrow: name.toUpperCase(), title: `Populares em ${name}` }; }
+  if (part === 'decade') { const start = Number(first); return { eyebrow: 'VIAGEM NO TEMPO', title: start < 2000 ? `Anos ${String(start).slice(2)}` : `Anos ${start}` }; }
+  if (part === 'lang') return { eyebrow: 'DE CASA', title: type === 'movie' ? 'Cinema português' : 'Séries portuguesas' };
+  return { eyebrow: 'EM DESTAQUE', title: 'Em destaque' };
+}
+
+function tmdbExtraIds(type) {
+  const ids = [];
+  const decades = [2020, 2010, 2000, 1990, 1980];
+  TMDB_GENRE_IDS[type].forEach((genreId, index) => {
+    ids.push(`tmdb:${type}:genre:${genreId}:popularity.desc`);
+    if (index % 3 === 1) ids.push(`tmdb:${type}:decade:${decades[Math.floor(index / 3) % decades.length]}`);
+    ids.push(`tmdb:${type}:genre:${genreId}:vote_average.desc`);
+    if (index === 3) ids.push(`tmdb:${type}:lang:pt`);
+  });
+  return [...new Set(ids)];
+}
+
+async function tmdbShelfPage(type, shelfId, cursor) {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const page = Math.max(1, Math.min(Number(cursor) || 1, 400));
+  const data = await memo(`tmdb|${shelfId}|${page}`, () => tmdbRequest(tmdbShelfResource(type, shelfId, page), tmdbApiKey));
+  const items = (data.results || []).filter((item) => item.poster_path).map((item) => normalizeTmdbItem({ ...item, media_type: type, ...(type === 'tv' ? { title: undefined } : {}) }, baseUrl, sizes));
+  return { items, cursor: page + 1, hasMore: page < Math.min(data.total_pages || 1, 400) };
+}
+
+const tmdbFeed = (type) => ({
+  firstCursor: 1,
+  def: (id) => tmdbShelfDef(type, id),
+  shelf: (id, cursor) => tmdbShelfPage(type, id, cursor),
+  extraIds: () => tmdbExtraIds(type),
+  category: (name, cursor) => {
+    const genreId = tmdbGenreId(type, name);
+    if (!genreId) return { items: [], cursor: 1, hasMore: false };
+    return tmdbShelfPage(type, `tmdb:${type}:genre:${genreId}:popularity.desc`, cursor);
+  },
+});
+
+// --- Música (iTunes / Spotify) ---
+const MUSIC_EXTRA = [
+  ['reggae', 'Reggae', 'O SOM DAS ILHAS'], ['country', 'Country', 'ESTRADAS DE POEIRA'], ['blues', 'Blues', 'ALMA E GUITARRA'], ['latin', 'Música latina', 'RITMOS LATINOS'],
+  ['k-pop', 'K-pop', 'DIRETO DA CORÉIA'], ['r&b soul', 'R&B e soul', 'VOZES COM ALMA'], ['indie', 'Indie', 'FORA DO COMUM'], ['heavy metal', 'Heavy metal', 'PESADO E RÁPIDO'],
+  ['punk', 'Punk', 'ATITUDE'], ['funk', 'Funk', 'GROOVE'], ['samba bossa nova', 'Samba e bossa nova', 'BRASIL'], ['mpb', 'MPB', 'MÚSICA BRASILEIRA'],
+  ['classical', 'Clássica', 'ORQUESTRAS'], ['opera', 'Ópera', 'GRANDES VOZES'], ['gospel', 'Gospel', 'ESPERANÇA'], ['lofi chill', 'Chill e lo-fi', 'PARA RELAXAR'],
+  ['disco', 'Disco', 'NOITES DE DISCO'], ['house', 'House', 'NA PISTA'], ['techno', 'Techno', 'BATIDAS'], ['ambient', 'Ambiente', 'SONS SUAVES'],
+  ['80s hits', 'Anos 80', 'NOSTALGIA'], ['90s hits', 'Anos 90', 'NOSTALGIA'], ['2000s hits', 'Anos 2000', 'NOSTALGIA'], ['acoustic', 'Acústico', 'SÓ VOZ E GUITARRA'],
+  ['workout', 'Treino', 'ENERGIA'], ['christmas', 'Natal', 'ÉPOCA FESTIVA'], ['children songs', 'Para os mais novos', 'EM FAMÍLIA'], ['afrobeats', 'Afrobeats', 'ÁFRICA EM ALTA'],
+  ['flamenco', 'Flamenco', 'PAIXÃO'], ['alternative', 'Alternativa', 'OUTRAS VIAS'],
+].map(([term, title, eyebrow]) => ({ term, title, eyebrow }));
+const MUSIC_ALL = [...MUSIC_SHELVES, ...MUSIC_EXTRA];
+const SPOTIFY_TERMS = { 'top hits': 'tag:new', 'hip hop': 'genre:"hip-hop"', 'jazz classical': 'genre:"jazz"', 'fado portugal': 'genre:"fado"', 'r&b soul': 'genre:"r-n-b"', 'heavy metal': 'genre:"metal"', 'lofi chill': 'genre:"chill"', 'samba bossa nova': 'genre:"samba"', 'children songs': 'genre:"children"', 'k-pop': 'genre:"k-pop"' };
+
+const itunesStamps = [];
+async function itunesAlbums(term) {
+  // a API do iTunes ignora "offset": pede-se o máximo (200) uma vez e pagina-se localmente
+  return memo(`itunes|${term}`, async () => {
+    while (itunesStamps.length && Date.now() - itunesStamps[0] > 60000) itunesStamps.shift();
+    if (itunesStamps.length >= 17) await new Promise((resolve) => setTimeout(resolve, 60000 - (Date.now() - itunesStamps[0]) + 200));
+    itunesStamps.push(Date.now());
+    const params = new URLSearchParams({ term, media: 'music', entity: 'album', country: 'PT', limit: '200' });
+    const data = await fetchPublicJson(`https://itunes.apple.com/search?${params}`);
+    const seen = new Set();
+    return (data.results || []).filter((album) => album.collectionId && album.collectionName && album.artworkUrl100 && !seen.has(album.collectionId) && seen.add(album.collectionId)).map(normalizeAlbum);
+  });
+}
+
+async function musicPage(term, cursor) {
+  const offset = Math.max(0, Number(cursor) || 0);
+  const settings = await readIntegrations();
+  if (settings.spotifyClientId && settings.spotifyClientSecret) {
+    try {
+      const token = await spotifyAccessToken(settings.spotifyClientId, settings.spotifyClientSecret);
+      const label = MUSIC_ALL.find((entry) => entry.term === term)?.title || term;
+      const data = await memo(`spotify|${term}|${offset}`, () => (term === 'new-releases'
+        ? spotifyGet(token, '/browse/new-releases', { country: 'PT', offset: String(offset) })
+        : spotifyGet(token, '/search', { q: SPOTIFY_TERMS[term] || (/\s/.test(term) ? term : `genre:"${term}"`), type: 'album', market: 'PT', offset: String(offset) })));
+      const list = data.albums?.items || [];
+      const seen = new Set();
+      const items = list.filter((album) => album?.id && album.name && album.images?.length && !seen.has(album.id) && seen.add(album.id)).map((album, index) => normalizeSpotifyAlbum(album, { genre: term, title: label }, index));
+      if (items.length) return { items, cursor: offset + list.length, hasMore: offset + list.length < 900 };
+    } catch { /* usa o iTunes como alternativa */ }
+  }
+  if (term === 'new-releases') return { items: [], cursor: 0, hasMore: false };
+  const all = await itunesAlbums(term);
+  return { items: all.slice(offset, offset + 30), cursor: offset + 30, hasMore: offset + 30 < all.length };
+}
+
+const musicFeed = {
+  firstCursor: 0,
+  def: (id) => MUSIC_ALL.find((entry) => `music:${entry.term}` === id) || { eyebrow: 'MÚSICA', title: 'Álbuns' },
+  shelf: (id, cursor) => musicPage(id.slice(6), cursor),
+  extraIds: () => MUSIC_EXTRA.map((entry) => `music:${entry.term}`),
+  category: (name, cursor) => musicPage(MUSIC_ALL.find((entry) => entry.title.toLowerCase() === String(name).toLowerCase())?.term || String(name).toLowerCase(), cursor),
+};
+
+// --- Livros (Open Library) ---
+const BOOK_EXTRA = [
+  ['thriller', 'Thriller e suspense', 'TENSÃO ATÉ À ÚLTIMA PÁGINA'], ['historical_fiction', 'Ficção histórica', 'VIAJA NO TEMPO'], ['classic_literature', 'Clássicos', 'PARA LER UMA VEZ NA VIDA'],
+  ['young_adult_fiction', 'Jovem adulto', 'JUVENTUDE'], ['childrens_literature', 'Infantil', 'PARA OS MAIS NOVOS'], ['history', 'História', 'O QUE JÁ ACONTECEU'], ['science', 'Ciência', 'CURIOSIDADE'],
+  ['philosophy', 'Filosofia', 'GRANDES PERGUNTAS'], ['psychology', 'Psicologia', 'A MENTE HUMANA'], ['self-help', 'Desenvolvimento pessoal', 'MELHORA-TE'], ['business', 'Negócios', 'EMPREENDEDORISMO'],
+  ['cooking', 'Culinária', 'À MESA'], ['travel', 'Viagens', 'CONHECE O MUNDO'], ['art', 'Arte', 'OLHA E SENTE'], ['poetry', 'Poesia', 'VERSOS'], ['humor', 'Humor', 'RISO GARANTIDO'],
+  ['dystopias', 'Distopia', 'FUTUROS SOMBRIOS'], ['adventure', 'Aventura', 'PARA FUGIR'], ['war', 'Guerra', 'HISTÓRIAS DE CONFLITO'], ['memoirs', 'Memórias', 'VIDAS REAIS'],
+  ['religion', 'Religião', 'FÉ E ESPIRITUALIDADE'], ['politics', 'Política', 'PODER'], ['economics', 'Economia', 'DINHEIRO'], ['technology', 'Tecnologia', 'DIGITAL'], ['nature', 'Natureza', 'LÁ FORA'],
+  ['sports', 'Desporto', 'EM CAMPO'], ['mythology', 'Mitologia', 'DEUSES E HERÓIS'], ['true_crime', 'Crime real', 'CASOS REAIS'], ['short_stories', 'Contos', 'LEITURAS CURTAS'], ['theatre', 'Teatro', 'PALCO'],
+].map(([subject, genre, eyebrow]) => ({ subject, genre, title: genre, eyebrow }));
+const BOOK_ALL = [
+  ...BOOK_SHELVES.map((shelf) => ({ subject: /\/subjects\/([^.]+)\.json/.exec(shelf.url)?.[1] || 'trending', genre: shelf.genre, title: shelf.title, eyebrow: shelf.eyebrow })),
+  ...BOOK_EXTRA,
+];
+
+async function bookPage(subject, cursor, genre) {
+  const offset = Math.max(0, Number(cursor) || 0);
+  const url = subject === 'trending'
+    ? `https://openlibrary.org/trending/weekly.json?limit=30&page=${Math.floor(offset / 30) + 1}`
+    : `https://openlibrary.org/subjects/${encodeURIComponent(subject)}.json?limit=30&offset=${offset}`;
+  const data = await memo(`books|${subject}|${offset}`, () => fetchPublicJson(url));
+  const works = data.works || [];
+  const items = works.filter((work) => work.title && (work.cover_id || work.cover_i)).map((work, index) => normalizeBook(work, { genre }, index));
+  return { items, cursor: offset + 30, hasMore: works.length >= 20 && offset < 600 };
+}
+
+const bookFeed = {
+  firstCursor: 0,
+  def: (id) => BOOK_ALL.find((entry) => `books:${entry.subject}` === id) || { eyebrow: 'LIVROS', title: 'Livros' },
+  shelf: (id, cursor) => { const entry = BOOK_ALL.find((candidate) => `books:${candidate.subject}` === id); return bookPage(id.slice(6), cursor, entry?.genre || 'Livros'); },
+  extraIds: () => BOOK_EXTRA.map((entry) => `books:${entry.subject}`),
+  category: async (name, cursor) => {
+    const entry = BOOK_ALL.find((candidate) => candidate.genre.toLowerCase() === String(name).toLowerCase());
+    if (entry) return bookPage(entry.subject, cursor, entry.genre);
+    const offset = Math.max(0, Number(cursor) || 0);
+    const data = await memo(`books|search|${name}|${offset}`, () => fetchPublicJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(`subject:"${name}"`)}&fields=key,title,author_name,cover_i,first_publish_year&limit=30&offset=${offset}`));
+    const docs = data.docs || [];
+    return { items: docs.filter((work) => work.title && work.cover_i).map((work, index) => normalizeBook(work, { genre: String(name) }, index)), cursor: offset + 30, hasMore: docs.length >= 20 && offset < 600 };
+  },
+};
+
+// --- Adultos: cinema (TMDB) e vídeos (RedTube, Pornhub, Eporner) ---
+const adultKeywordCache = new Map();
+async function adultKeywordIds(index, apiKey) {
+  if (adultKeywordCache.has(index)) return adultKeywordCache.get(index);
+  const ids = new Set();
+  for (const keyword of ADULT_SHELVES[index].keywords) {
+    try {
+      const found = await tmdbRequest(`/search/keyword?query=${encodeURIComponent(keyword)}`, apiKey);
+      (found.results || []).slice(0, 2).forEach((entry) => ids.add(entry.id));
+    } catch { /* ignora palavras-chave sem resultados */ }
+  }
+  const joined = [...ids].join('|');
+  adultKeywordCache.set(index, joined);
+  return joined;
+}
+
+async function adultCinemaPage(index, cursor) {
+  const shelf = ADULT_SHELVES[index];
+  if (!shelf) return { items: [], cursor: 1, hasMore: false };
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const keywords = await adultKeywordIds(index, tmdbApiKey);
+  if (!keywords) return { items: [], cursor: 1, hasMore: false };
+  const page = Math.max(1, Math.min(Number(cursor) || 1, 200));
+  const data = await memo(`adultc|${index}|${page}`, () => tmdbRequest(`/discover/movie?language=pt-PT&include_adult=true&sort_by=popularity.desc&with_keywords=${keywords}&page=${page}`, tmdbApiKey));
+  const items = (data.results || []).filter((item) => item.poster_path).map((item) => ({ ...normalizeTmdbItem({ ...item, media_type: 'movie' }, baseUrl, sizes), adult: true, genre: shelf.title, genres: [shelf.title] }));
+  return { items, cursor: page + 1, hasMore: page < Math.min(data.total_pages || 1, 200) };
+}
+
+const adultCinemaFeed = {
+  firstCursor: 1,
+  def: (id) => ADULT_SHELVES[Number(id.split(':')[1])] || { eyebrow: 'EM DESTAQUE', title: 'Cinema' },
+  shelf: (id, cursor) => adultCinemaPage(Number(id.split(':')[1]), cursor),
+  extraIds: () => [],
+  category: (name, cursor) => adultCinemaPage(ADULT_SHELVES.findIndex((shelf) => shelf.title === name), cursor),
+};
+
+const ADULTV_CATEGORIES = [
+  ['amateur', 'Amador'], ['homemade', 'Caseiro'], ['asian', 'Asiático'], ['latina', 'Latino'], ['ebony', 'Ébano'], ['lesbian', 'Lésbicas'], ['milf', 'MILF'], ['mature', 'Madura'],
+  ['anal', 'Anal'], ['blowjob', 'Oral'], ['threesome', 'Trio'], ['massage', 'Massagem'], ['pov', 'POV'], ['fetish', 'Fetiche'], ['cosplay', 'Cosplay'], ['hentai', 'Hentai'],
+  ['compilation', 'Compilações'], ['outdoor', 'Ar livre'], ['vr', 'Realidade virtual'],
+];
+const ADULTV_MONTHLY = { rt: { ordering: 'mostviewed', period: 'monthly' }, ph: { ordering: 'mostviewed', period: 'monthly' }, ep: 'top-monthly' };
+const ADULTV_NEWEST = { rt: { ordering: 'newest' }, ph: { ordering: 'newest' }, ep: 'latest' };
+const ADULTV_RATED = { rt: { ordering: 'rating', period: 'monthly' }, ph: { ordering: 'rating', period: 'monthly' }, ep: 'top-rated' };
+
+async function adultVideosPage(spec, term, orientation, cursor) {
+  const page = Math.max(1, Math.min(Number(cursor) || 1, 25));
+  return memo(`adultv|${orientation}|${term}|${JSON.stringify(spec)}|${page}`, async () => {
+    const settled = await Promise.allSettled([fetchRedtubeVideos(spec.rt, term, orientation, page), fetchPornhubVideos(spec.ph, term, orientation, page), fetchEpornerVideos(spec.ep, term, orientation, page)]);
+    const items = interleaveAdult(settled.map((entry) => (entry.status === 'fulfilled' ? entry.value : [])), new Set(), 36);
+    return { items, cursor: page + 1, hasMore: items.length > 0 && page < 25 };
+  }, 5 * 60 * 1000);
+}
+
+const adultVideosFeed = {
+  firstCursor: 1,
+  def: (id) => {
+    if (id.startsWith('adultv:row:')) { const row = ADULT_ROWS[Number(id.split(':')[2])] || ADULT_ROWS[0]; return { eyebrow: row.eyebrow, title: row.title }; }
+    const [, mode, term] = id.split(':');
+    const entry = ADULTV_CATEGORIES.find(([key]) => key === term);
+    const label = entry ? entry[1] : 'Vídeos';
+    return mode === 'new' ? { eyebrow: 'ACABADOS DE CHEGAR', title: `Novidades · ${label}` } : mode === 'rated' ? { eyebrow: 'ESCOLHA DOS UTILIZADORES', title: `Mais bem avaliados · ${label}` } : { eyebrow: 'CATEGORIA', title: `Mais vistos · ${label}` };
+  },
+  shelf: (id, cursor, ctx) => {
+    if (id.startsWith('adultv:row:')) return adultVideosPage(ADULT_ROWS[Number(id.split(':')[2])] || ADULT_ROWS[0], '', ctx.orientation, cursor);
+    const [, mode, term] = id.split(':');
+    return adultVideosPage(mode === 'new' ? ADULTV_NEWEST : mode === 'rated' ? ADULTV_RATED : ADULTV_MONTHLY, term, ctx.orientation, cursor);
+  },
+  extraIds: () => [...ADULTV_CATEGORIES.map(([term]) => `adultv:cat:${term}`), ...ADULTV_CATEGORIES.map(([term]) => `adultv:new:${term}`), ...ADULTV_CATEGORIES.map(([term]) => `adultv:rated:${term}`)],
+  category: (name, cursor, ctx) => {
+    const entry = ADULTV_CATEGORIES.find(([, label]) => label === name);
+    return adultVideosPage(ADULTV_MONTHLY, entry ? entry[0] : String(name).toLowerCase(), ctx.orientation, cursor);
+  },
+};
+
+const FEEDS = { films: tmdbFeed('movie'), series: tmdbFeed('tv'), tv: tmdbFeed('tv'), music: musicFeed, books: bookFeed, adult: adultCinemaFeed, adultvideos: adultVideosFeed };
+const feedOrientation = (value) => (ADULT_ORIENTATIONS[value] ? value : 'straight');
+
+const withTimeout = (promise, ms = 30000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('A fonte demorou demasiado a responder.')), ms))]);
+
+async function feedShelf(value = {}) {
+  const feed = FEEDS[value.kind];
+  if (!feed) throw new Error('Tipo de feed inválido.');
+  return withTimeout(feed.shelf(String(value.shelfId || ''), value.cursor ?? feed.firstCursor, { orientation: feedOrientation(value.orientation) }));
+}
+
+async function feedCategory(value = {}) {
+  const feed = FEEDS[value.kind];
+  if (!feed) throw new Error('Tipo de feed inválido.');
+  return withTimeout(Promise.resolve(feed.category(String(value.category || ''), value.cursor ?? feed.firstCursor, { orientation: feedOrientation(value.orientation) })));
+}
+
+async function feedShelves(value = {}) {
+  const feed = FEEDS[value.kind];
+  if (!feed) throw new Error('Tipo de feed inválido.');
+  const ctx = { orientation: feedOrientation(value.orientation) };
+  const ids = feed.extraIds(ctx);
+  const offset = Math.max(0, Number(value.offset) || 0);
+  const slice = ids.slice(offset, offset + Math.max(1, Math.min(Number(value.count) || 2, 4)));
+  const shelves = await Promise.all(slice.map(async (id) => {
+    try {
+      const page = await withTimeout(feed.shelf(id, feed.firstCursor, ctx));
+      return { ...feed.def(id), feedId: id, items: page.items, cursor: page.cursor, hasMore: page.hasMore };
+    } catch { return null; }
+  }));
+  return { shelves: shelves.filter(Boolean), consumed: slice.length, done: offset + slice.length >= ids.length };
 }
 
 async function fetchDiscovery({ kind } = {}) {
@@ -1492,6 +1790,9 @@ function registerIpc() {
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('discovery:fetch', resultHandler(fetchDiscovery));
+  ipcMain.handle('feed:shelf', resultHandler(feedShelf));
+  ipcMain.handle('feed:shelves', resultHandler(feedShelves));
+  ipcMain.handle('feed:category', resultHandler(feedCategory));
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));

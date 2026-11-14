@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 import { FreeMusicPanel } from './Music.jsx';
+import { FeedShelves } from './Feed.jsx';
 import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
@@ -147,7 +148,20 @@ const DISCOVERY_COLLECTIONS = {
   ],
 };
 
-function makeDistinctShelves(shelves, excludedIds = [], limit = 12) {
+const FEED_SHELF_IDS = {
+  films: { 'Filmes populares': 'tmdb:movie:list:trending', 'Populares no StreamNexus': 'tmdb:movie:list:popular', 'Estreias recentes': 'tmdb:movie:list:now_playing', 'Mais bem avaliados': 'tmdb:movie:list:top_rated' },
+  series: { 'Séries populares': 'tmdb:tv:list:trending', 'Séries populares no StreamNexus': 'tmdb:tv:list:popular', 'Séries a acompanhar': 'tmdb:tv:list:on_the_air', 'Mais bem avaliadas': 'tmdb:tv:list:top_rated' },
+};
+const FEED_KINDS = { films: 'films', series: 'series', tv: 'tv', music: 'music', books: 'books', adult: 'adult' };
+const STATIC_GENRES = {
+  films: ['Ação', 'Aventura', 'Animação', 'Comédia', 'Crime', 'Documentário', 'Drama', 'Família', 'Fantasia', 'História', 'Terror', 'Música', 'Mistério', 'Romance', 'Ficção científica', 'Thriller', 'Guerra', 'Western'],
+  series: ['Ação e aventura', 'Animação', 'Comédia', 'Crime', 'Documentário', 'Drama', 'Família', 'Infantil', 'Mistério', 'Reality', 'Ficção científica', 'Novela', 'Talk show', 'Guerra', 'Western'],
+  tv: ['Reality', 'Talk show', 'Documentário', 'Infantil', 'Novela', 'Notícias', 'Comédia', 'Drama'],
+  music: ['Pop', 'Rock e metal', 'Hip-hop', 'Eletrónica', 'Bandas sonoras', 'Jazz e clássica', 'Reggae', 'Country', 'Blues', 'Música latina', 'K-pop', 'R&B e soul', 'Indie', 'Funk', 'Samba e bossa nova', 'MPB', 'Clássica', 'Ópera', 'Gospel', 'Chill e lo-fi', 'Disco', 'House', 'Techno'],
+  books: ['Fantasia', 'Ficção científica', 'Mistério', 'Romance', 'Terror', 'Biografia', 'Banda desenhada', 'Thriller e suspense', 'Ficção histórica', 'Clássicos', 'Jovem adulto', 'Infantil', 'História', 'Ciência', 'Filosofia', 'Psicologia', 'Desenvolvimento pessoal', 'Negócios', 'Culinária', 'Viagens', 'Arte', 'Poesia', 'Humor', 'Distopia', 'Aventura', 'Guerra', 'Memórias', 'Religião', 'Política', 'Economia', 'Tecnologia', 'Natureza', 'Desporto', 'Mitologia', 'Crime real', 'Contos', 'Teatro'],
+};
+
+function makeDistinctShelves(shelves, excludedIds = [], limit = 40) {
   const seen = new Set(excludedIds);
   return shelves.map((shelf) => {
     const items = [];
@@ -1008,8 +1022,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos(adultCategory, adultOrientation);
-  }, [activePage, adultEnabled, adultMode, adultCategory, adultOrientation, loadAdultVideos]);
+    if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos('Todos', adultOrientation);
+  }, [activePage, adultEnabled, adultMode, adultOrientation, loadAdultVideos]);
 
   const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
   const [liveCountries, setLiveCountries] = useState([]);
@@ -1205,7 +1219,7 @@ function App() {
   const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
   const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
-  const browseGenres = [...new Set(genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-PT'));
+  const browseGenres = [...new Set([...(STATIC_GENRES[activePage] || []), ...genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'pt-PT'));
   const readyTorrents = rdItems.filter((item) => item.status === 'downloaded');
   const browsingShelves = discoveryPage
     ? makeDistinctShelves(discoveryShelves.map((row) => ({ ...row, page: activePage })), [featuredTitle.id])
@@ -1232,6 +1246,8 @@ function App() {
         { eyebrow: 'MAIS BEM AVALIADOS', title: 'Favoritos do público', items: [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])].length ? [...(catalogRows?.topMovies || []), ...(catalogRows?.topSeries || [])] : [...catalogTitles].sort((a, b) => Number(b.rating) - Number(a.rating)), page: 'films', ranked: true },
       ], [featuredTitle.id]);
 
+  const feedKind = FEED_KINDS[activePage] || '';
+  const pagedShelves = browsingShelves.map((shelf) => { const feedId = FEED_SHELF_IDS[activePage]?.[shelf.title]; return feedId ? { ...shelf, feedId, cursor: 2, hasMore: true } : shelf; });
   const visibleBrowsingShelves = genre === 'Todos' ? browsingShelves : makeDistinctShelves(
     browsingShelves.map((shelf) => ({ ...shelf, items: shelf.items.filter((item) => item.genre === genre || item.genres?.includes(genre)) })),
   []);
@@ -1458,7 +1474,7 @@ function App() {
         ) : activePage === 'tv' && tvMode === 'channels' && !query ? (
           <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} health={liveHealth} showOffline={showOffline} onShowOffline={setShowOffline} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
-          <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos(adultCategory, adultOrientation)}/>
+          <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
             {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
@@ -1480,8 +1496,9 @@ function App() {
                 : discoveryState?.status === 'error' ? <><strong>Não foi possível carregar {DISCOVERY_LABELS[activePage]}</strong><p className="is-error-text">{discoveryState.message}</p><button className="text-link" onClick={() => loadDiscovery(activePage)}>Tentar novamente <Icon name="refresh" size={14}/></button></>
                   : <><strong>A carregar {DISCOVERY_LABELS[activePage]}…</strong><p>A reunir os títulos em destaque.</p></>}
             </div>}
-            {genre !== 'Todos' && showDiscover && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
-            {(showDiscover ? visibleBrowsingShelves : []).map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
+            {showDiscover && feedKind && <FeedShelves key={feedKind} kind={feedKind} shelves={pagedShelves} genre={genre} activePage={activePage} renderCard={(item, index, rank) => <PosterCard key={item.id} item={item} index={index} rank={rank} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>} onViewAll={(page) => { setActivePage(page); setQuery(''); }}/>}
+            {!feedKind && genre !== 'Todos' && showDiscover && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
+            {(showDiscover && !feedKind ? visibleBrowsingShelves : []).map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls">{shelf.page !== activePage && <button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button>}<div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>
               <div className={`poster-row ${shelf.ranked ? 'ranked-row' : ''}`}>{shelf.items.map((item, index) => <PosterCard key={item.id} item={item} index={index} rank={shelf.ranked ? index + 1 : null} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>)}</div>
             </section>)}

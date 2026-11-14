@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
+import { FeedShelves } from './Feed.jsx';
 
 export const ADULT_CATEGORIES = [
   { label: 'Amador', term: 'amateur' }, { label: 'Caseiro', term: 'homemade' }, { label: 'Asiático', term: 'asian' }, { label: 'Latino', term: 'latina' },
@@ -17,6 +19,7 @@ export function AdultModeTabs({ mode, onMode }) {
 export const ADULT_ORIENTATIONS = [['straight', 'Hétero'], ['gay', 'Gay'], ['trans', 'Trans']];
 
 export function AdultVideosPage({ mode, onMode, orientation, onOrientation, state, category, onCategory, onPlay, onRetry }) {
+  const shelves = useMemo(() => state.rows.filter((row) => row.items.length > 0).map((row) => ({ ...row, page: 'adult' })), [state.rows]);
   return <section className="live-tv adult-videos page-in">
     <div className="live-head">
       <div><span className="eyebrow"><span className="pulse-dot"></span> +18 · CONTEÚDO PARA ADULTOS</span><h1>Vídeos</h1><p>Catálogo das APIs públicas do RedTube, Pornhub e Eporner. Os vídeos reproduzem-se no leitor incorporado de cada site.</p></div>
@@ -31,9 +34,6 @@ export function AdultVideosPage({ mode, onMode, orientation, onOrientation, stat
     {state.status === 'loading' && state.rows.length === 0 && <div className="empty-list catalog-empty"><span><span className="spinner"></span></span><strong>A carregar vídeos…</strong><p>A consultar as fontes.</p></div>}
     {state.status === 'error' && <div className="empty-list catalog-empty"><span><Icon name="alert" size={22}/></span><strong>Não foi possível carregar os vídeos</strong><p className="is-error-text">{state.message}</p><button className="text-link" onClick={onRetry}>Tentar novamente <Icon name="refresh" size={14}/></button></div>}
 
-    {state.rows.map((row) => row.items.length > 0 && <section className="content-section discovery-rail" key={row.title}>
-      <div className="section-heading"><div><span className="eyebrow">{row.eyebrow}</span><h2>{category === 'Todos' ? row.title : `${category} · ${row.title}`}</h2></div></div>
-      <div className="poster-row">{row.items.map((item, index) => <PosterCard key={item.id} item={item} index={index % 12} saved={false} hideSave onOpen={() => onPlay(item)}/>)}</div>
-    </section>)}
+    {(state.rows.length > 0 || category !== 'Todos') && <FeedShelves key={orientation} kind="adultvideos" shelves={shelves} genre={category} activePage="adult" orientation={orientation} renderCard={(item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onOpen={() => onPlay(item)}/>}/>}
   </section>;
 }

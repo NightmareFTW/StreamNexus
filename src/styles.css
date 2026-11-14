@@ -869,3 +869,20 @@ html, body { background: #070707; }
 .quality-menu button { padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: #d5d5db; font: 600 12px 'Manrope', sans-serif; text-align: left; cursor: pointer; }
 .quality-menu button:hover { background: rgba(255,255,255,.08); color: #fff; }
 .quality-menu button.active { background: rgba(229,9,20,.2); color: #fff; }
+
+
+/* Scroll infinito: grelha por categoria, carregamento progressivo e esqueletos */
+.infinite-grid { --card-min: 160px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr)); gap: 20px 15px; }
+.infinite-grid.grid-music { --card-min: 170px; }
+.infinite-grid.grid-book { --card-min: 150px; }
+.infinite-grid.grid-clip { --card-min: 250px; }
+.feed-sentinel { height: 1px; }
+.category-feed { margin-top: 18px; }
+.poster-skeleton { pointer-events: none; }
+.poster-skeleton .poster-image { background: linear-gradient(100deg, #15151a 30%, #22222a 50%, #15151a 70%); background-size: 220% 100%; animation: feed-shimmer 1.4s ease-in-out infinite; }
+.poster-skeleton .poster-shade { display: none; }
+.skeleton-line { display: block; height: 10px; margin-top: 10px; border-radius: 99px; background: linear-gradient(100deg, #15151a 30%, #22222a 50%, #15151a 70%); background-size: 220% 100%; animation: feed-shimmer 1.4s ease-in-out infinite; }
+.skeleton-line.short { width: 55%; margin-top: 6px; }
+.skeleton-line.wide { width: 220px; height: 18px; }
+@keyframes feed-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .poster-skeleton .poster-image, .skeleton-line { animation: none; } }
