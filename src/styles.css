@@ -709,3 +709,57 @@ html, body { background: #070707; }
 .reading-slider { display: flex; align-items: center; gap: 12px; color: #c4c4cb; font-size: 12px; }
 .reading-slider input { flex: 1; accent-color: #e50914; }
 @media (max-width: 900px) { .rd-card.rd-wide { grid-column: auto; } }
+
+
+/* Scroll integrado: barras finas e discretas; filas horizontais sem barra */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.2) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: rgba(255,255,255,.18); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.32); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+.scroll-row { overflow-x: auto; scrollbar-width: none; cursor: grab; overscroll-behavior-x: contain; user-select: none; }
+.scroll-row::-webkit-scrollbar { display: none; }
+.scroll-row.is-dragging { cursor: grabbing; }
+.scroll-row.is-dragging * { pointer-events: none; }
+.scroll-row.fade-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent); }
+.scroll-row.fade-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 64px); mask-image: linear-gradient(90deg, transparent, #000 64px); }
+.scroll-row.fade-left.fade-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 64px, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(90deg, transparent, #000 64px, #000 calc(100% - 64px), transparent); }
+.genre-chips { -webkit-mask-image: none; mask-image: none; padding-right: 0; scroll-behavior: auto; }
+.genre-chips.fade-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent); }
+.genre-chips.fade-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 64px); mask-image: linear-gradient(90deg, transparent, #000 64px); }
+.genre-chips.fade-left.fade-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 64px, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(90deg, transparent, #000 64px, #000 calc(100% - 64px), transparent); }
+
+/* Barra "Catálogo atualizado": de ponta a ponta e integrada no fundo */
+.status-bar { left: 0; right: 0; padding: 8px clamp(20px, 4vw, 64px); border: 0; border-top: 1px solid rgba(255,255,255,.05); background: linear-gradient(0deg, rgba(7,7,7,.98), rgba(7,7,7,.86)); backdrop-filter: blur(10px); color: #7f7f88; font-size: 10px; }
+.status-bar.is-error { border-top-color: rgba(234,161,95,.35); }
+.status-bar .text-link, .status-bar button { color: #a9a9b2; }
+.main-content { padding-bottom: 40px; }
+
+/* Cartões de canais e vídeos */
+.poster-card.poster-channel .poster-image, .poster-card.poster-clip .poster-image { aspect-ratio: 16 / 9; }
+.poster-card.poster-channel .poster-image { display: grid; place-items: center; background: linear-gradient(160deg, #1b1b22, #0f0f14); }
+.poster-card.poster-channel .poster-image img { width: 72%; height: 72%; object-fit: contain; }
+.poster-card.poster-clip .poster-image img { object-fit: cover; }
+
+
+/* TV ao vivo */
+.live-tv { padding-top: 30px; }
+.live-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+.live-head h1 { margin: 6px 0 4px; font: 800 clamp(26px, 3vw, 36px)/1.1 'Manrope', sans-serif; letter-spacing: -1px; color: #fff; }
+.live-head p { margin: 0; color: #8d8d95; font-size: 13px; }
+.live-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mode-tabs { display: inline-flex; padding: 3px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(255,255,255,.04); }
+.mode-tabs button { padding: 8px 15px; border: 0; border-radius: 999px; background: transparent; color: #b7b7bf; font: 600 12px 'Manrope', sans-serif; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.mode-tabs button:hover { color: #fff; }
+.mode-tabs button.active { background: #fff; color: #111; }
+.home-page > .mode-tabs { margin: 26px 0 -10px; }
+.live-field { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(255,255,255,.04); color: #8d8d95; font-size: 11px; }
+.live-field select, .live-field input { border: 0; outline: 0; background: transparent; color: #f1f1f4; font: 600 12px 'Manrope', sans-serif; }
+.live-field select { max-width: 220px; cursor: pointer; }
+.live-field select option { background: #141414; color: #f1f1f4; }
+.live-field input { width: 150px; }
+.live-field input::placeholder { color: #707078; }
+.genre-chips button small { margin-left: 4px; opacity: .55; font-size: 9px; }
+.channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 15px; }
+.live-tv .content-section:first-of-type { margin-top: 18px; }

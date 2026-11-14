@@ -1,0 +1,114 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+export const POSTER_KIND = { 'Álbum': 'music', 'Livro': 'book', 'Canal': 'channel', 'Vídeo': 'clip' };
+
+export function Icon({ name, size = 18, stroke = 1.8 }) {
+  const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: stroke, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true };
+  const paths = {
+    compass: <><circle cx="12" cy="12" r="9"/><path d="m15.6 8.4-2.5 5.1-5.1 2.5 2.5-5.1z"/></>,
+    film: <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4m-4 8h4m10-8h4m-4 8h4"/></>,
+    tv: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 2 4 3 4-3M8 22h8"/></>,
+    music: <><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></>,
+    book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 0 4 22z"/><path d="M4 5.5v14A2.5 2.5 0 0 1 6.5 17H20"/></>,
+    adult: <><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h2m6 0h2m-8 5a3 3 0 0 0 6 0"/><path d="M8 2v2m8-2v2"/></>,
+    bookmark: <><path d="M6 4.8A1.8 1.8 0 0 1 7.8 3h8.4A1.8 1.8 0 0 1 18 4.8V21l-6-3.8L6 21z"/></>,
+    download: <><path d="M12 3v12m-5-5 5 5 5-5"/><path d="M5 17v3h14v-3"/></>,
+    settings: <><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1a1.7 1.7 0 1 1-2.4 2.4l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.3a1.7 1.7 0 1 1-3.4 0v-.2a1.7 1.7 0 0 0-2.9-1.2l-.1.1a1.7 1.7 0 1 1-2.4-2.4l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.3a1.7 1.7 0 1 1 0-3.4h.2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a1.7 1.7 0 1 1 2.4-2.4l.1.1a1.7 1.7 0 0 0 2.9-1.2v-.3a1.7 1.7 0 1 1 3.4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a1.7 1.7 0 1 1 2.4 2.4l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.3a1.7 1.7 0 1 1 0 3.4h-.2a1.7 1.7 0 0 0-1.2 2.9z"/></>,
+    search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
+    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
+    chevron: <path d="m9 18 6-6-6-6"/>,
+    play: <path d="m8 5 12 7-12 7z" fill="currentColor" stroke="none"/>,
+    pause: <><path d="M8 5v14M16 5v14" strokeWidth="3"/></>,
+    skipBack: <><path d="M5 5v14" strokeWidth="2.5"/><path d="m19 6-10 6 10 6z" fill="currentColor" stroke="none"/></>,
+    skipForward: <><path d="M19 5v14" strokeWidth="2.5"/><path d="m5 6 10 6-10 6z" fill="currentColor" stroke="none"/></>,
+    volume: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13"/></>,
+    volumeOff: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 5 6m0-6-5 6"/></>,
+    captions: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4m-4 4h3m4-4h3m-3 4h4"/></>,
+    fullscreen: <><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    check: <path d="m5 12 4 4L19 6"/>,
+    close: <><path d="m18 6-12 12M6 6l12 12"/></>,
+    external: <><path d="M14 3h7v7M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></>,
+    spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="m19 16 .8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.1 0l3-3A5 5 0 0 0 13 2.9l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/></>,
+    cloud: <><path d="M20 16.2A4 4 0 0 0 18 8.5a6 6 0 0 0-11.7 1.4A4 4 0 0 0 7 18h11"/><path d="m12 12-3 3h2v4h2v-4h2z"/></>,
+    alert: <><path d="M10.3 4.3 2.9 17a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
+    refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></>,
+    trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></>,
+  };
+  return <svg {...common}>{paths[name] || paths.spark}</svg>;
+}
+
+/* Fila horizontal sem barra visível: roda do rato, arrastar e esbatido nas pontas */
+export function ScrollRow({ className = '', children, ...props }) {
+  const ref = useRef(null);
+  const drag = useRef({ active: false, moved: false, startX: 0, startLeft: 0 });
+  const [edges, setEdges] = useState({ left: false, right: false });
+
+  const update = useCallback(() => {
+    const element = ref.current;
+    if (!element) return;
+    const left = element.scrollLeft > 4;
+    const right = element.scrollLeft + element.clientWidth < element.scrollWidth - 4;
+    setEdges((previous) => (previous.left === left && previous.right === right ? previous : { left, right }));
+  }, []);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+    update();
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      const max = element.scrollWidth - element.clientWidth;
+      if (max <= 0) return;
+      if ((event.deltaY < 0 && element.scrollLeft <= 0) || (event.deltaY > 0 && element.scrollLeft >= max - 1)) return;
+      event.preventDefault();
+      element.scrollLeft = Math.max(0, Math.min(max, element.scrollLeft + event.deltaY));
+    };
+    const onMove = (event) => {
+      if (!drag.current.active) return;
+      const distance = event.clientX - drag.current.startX;
+      if (Math.abs(distance) > 5) drag.current.moved = true;
+      element.scrollLeft = drag.current.startLeft - distance;
+    };
+    const onUp = () => { drag.current.active = false; element.classList.remove('is-dragging'); };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('resize', update);
+    return () => {
+      element.removeEventListener('wheel', onWheel);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('resize', update);
+    };
+  }, [update]);
+
+  useEffect(update);
+
+  return <div
+    ref={ref}
+    className={`scroll-row ${className} ${edges.left ? 'fade-left' : ''} ${edges.right ? 'fade-right' : ''}`}
+    onScroll={update}
+    onMouseDown={(event) => {
+      if (event.button !== 0 || !ref.current) return;
+      drag.current = { active: true, moved: false, startX: event.clientX, startLeft: ref.current.scrollLeft };
+      ref.current.classList.add('is-dragging');
+    }}
+    onClickCapture={(event) => { if (drag.current.moved) { event.preventDefault(); event.stopPropagation(); drag.current.moved = false; } }}
+    {...props}
+  >{children}</div>;
+}
+
+export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave = false }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
+    {rank && <span className="poster-rank">{rank}</span>}
+    <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
+      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img src={item.poster} alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageFailed(true)}/>}
+      <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
+    </button>
+    {!hideSave && <button className={`poster-save ${saved ? 'saved' : ''}`} aria-label={saved ? 'Remover da lista' : 'Adicionar à lista'} onClick={onSave}><Icon name={saved ? 'check' : 'plus'} size={15}/></button>}
+    <button className="poster-title" onClick={onOpen}>{item.title}</button><div className="poster-sub"><span>{item.creator ? item.creator : <>{item.year} <i>·</i> {item.genre}</>}</span>{item.rating && <span className="poster-rating">★ {item.rating}</span>}</div>
+  </article>;
+}

@@ -441,6 +441,99 @@ async function fetchAdultDiscovery() {
   return rows;
 }
 
+// ---- TV ao vivo (iptv-org: canais e emissões públicas) ----
+const LIVE_TTL = 6 * 60 * 60 * 1000;
+const liveStreamMeta = new Map();
+let liveTvCache = null;
+let liveTvPromise = null;
+const TV_CATEGORY_LABELS = {
+  general: 'Geral', news: 'Notícias', sports: 'Desporto', entertainment: 'Entretenimento', kids: 'Infantil', music: 'Música', movies: 'Filmes', series: 'Séries',
+  documentary: 'Documentários', comedy: 'Comédia', culture: 'Cultura', education: 'Educação', family: 'Família', lifestyle: 'Estilo de vida', religious: 'Religião',
+  science: 'Ciência', travel: 'Viagens', weather: 'Meteorologia', business: 'Negócios', cooking: 'Culinária', animation: 'Animação', auto: 'Automóvel',
+  classic: 'Clássicos', legislative: 'Parlamento', outdoor: 'Natureza', relax: 'Relax', shop: 'Compras', interactive: 'Interativo', public: 'Serviço público',
+};
+
+function streamScore(stream) {
+  const quality = Math.min(Number(String(stream.quality || '').match(/(\d{3,4})p/)?.[1]) || 480, 1080);
+  return (stream.referrer || stream.user_agent ? 100000 : 0) + (/^https:/i.test(stream.url) ? 0 : 50000) - quality;
+}
+
+async function loadLiveTv() {
+  if (liveTvCache && Date.now() - liveTvCache.at < LIVE_TTL) return liveTvCache;
+  if (!liveTvPromise) {
+    liveTvPromise = (async () => {
+      const base = 'https://iptv-org.github.io/api';
+      const [channels, streams, logos, countries] = await Promise.all(['channels', 'streams', 'logos', 'countries'].map((name) => fetchPublicJson(`${base}/${name}.json`)));
+      const logoByChannel = new Map();
+      for (const logo of logos) if (logo.channel && logo.url && logo.in_use !== false && !logoByChannel.has(logo.channel)) logoByChannel.set(logo.channel, logo.url);
+      const streamsByChannel = new Map();
+      for (const stream of streams) {
+        if (!stream.channel || !/^https?:/i.test(stream.url || '')) continue;
+        if (!streamsByChannel.has(stream.channel)) streamsByChannel.set(stream.channel, []);
+        streamsByChannel.get(stream.channel).push(stream);
+      }
+      let regionNames = null;
+      try { regionNames = new Intl.DisplayNames(['pt-PT'], { type: 'region' }); } catch { regionNames = null; }
+      const countryInfo = new Map(countries.map((country) => {
+        let name = '';
+        try { name = regionNames?.of(country.code) || ''; } catch { name = ''; }
+        return [country.code, { code: country.code, flag: country.flag || '', name: name || country.name }];
+      }));
+      const byCountry = new Map();
+      liveStreamMeta.clear();
+      for (const channel of channels) {
+        if (channel.is_nsfw || channel.closed || !channel.country || !countryInfo.has(channel.country)) continue;
+        const list = streamsByChannel.get(channel.id);
+        if (!list?.length) continue;
+        const usable = [];
+        const seen = new Set();
+        for (const stream of list.slice().sort((a, b) => streamScore(a) - streamScore(b))) {
+          if (seen.has(stream.url)) continue;
+          seen.add(stream.url); usable.push(stream);
+          if (usable.length >= 4) break;
+        }
+        usable.forEach((stream) => liveStreamMeta.set(stream.url, { referrer: stream.referrer || '', userAgent: stream.user_agent || '' }));
+        const labels = (channel.categories?.length ? channel.categories : ['general']).map((id) => TV_CATEGORY_LABELS[id] || 'Outros');
+        const info = countryInfo.get(channel.country);
+        const logo = logoByChannel.get(channel.id) || '';
+        const item = {
+          id: `live-${channel.id}`, type: 'Canal', title: channel.name, original: channel.name, creator: info.name, year: '', rating: '',
+          genre: labels[0], genres: [...new Set(labels)], runtime: 'Ao vivo', poster: logo, backdrop: logo, description: `Canal de televisão · ${info.name}`, accent: '#b30d1b',
+          streams: usable.map((stream) => ({ url: stream.url, quality: stream.quality || '' })),
+        };
+        if (!byCountry.has(channel.country)) byCountry.set(channel.country, []);
+        byCountry.get(channel.country).push(item);
+      }
+      for (const list of byCountry.values()) list.sort((a, b) => a.title.localeCompare(b.title, 'pt-PT'));
+      liveTvCache = { at: Date.now(), byCountry, countryInfo };
+      return liveTvCache;
+    })().finally(() => { liveTvPromise = null; });
+  }
+  return liveTvPromise;
+}
+
+async function fetchLiveCountries() {
+  const { byCountry, countryInfo } = await loadLiveTv();
+  return [...byCountry.entries()]
+    .map(([code, list]) => ({ ...countryInfo.get(code), count: list.length }))
+    .sort((a, b) => (a.code === 'PT' ? -1 : b.code === 'PT' ? 1 : a.name.localeCompare(b.name, 'pt-PT')));
+}
+
+async function fetchLiveChannels({ country } = {}) {
+  const { byCountry } = await loadLiveTv();
+  const items = byCountry.get(String(country || '').toUpperCase());
+  if (!items) throw new Error('Não há canais disponíveis para este país.');
+  const counts = new Map();
+  items.forEach((item) => item.genres.forEach((label) => counts.set(label, (counts.get(label) || 0) + 1)));
+  return { items, categories: [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count })) };
+}
+
+function validateLiveStreamUrl(value) {
+  const url = String(value || '');
+  if (!liveStreamMeta.has(url)) throw new Error('Esta emissão já não está disponível. Volta a abrir a lista de canais.');
+  return url;
+}
+
 async function fetchDiscovery({ kind } = {}) {
   const loaders = { tv: fetchTvDiscovery, music: fetchMusicDiscovery, books: fetchBooksDiscovery, adult: fetchAdultDiscovery };
   if (!loaders[kind]) throw new Error('Tipo de descoberta inválido.');
@@ -508,10 +601,10 @@ function validateRealDebridStreamUrl(value) {
 }
 
 // Lê o codec do vídeo com `ffmpeg -i` (o ffmpeg-static não inclui o ffprobe).
-function probeVideoCodec(executable, sourceUrl) {
+function probeVideoCodec(executable, sourceUrl, inputArgs = []) {
   return new Promise((resolve) => {
     let output = '';
-    const child = spawn(executable, ['-hide_banner', '-i', sourceUrl], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(executable, ['-hide_banner', ...inputArgs, '-i', sourceUrl], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     const timer = setTimeout(() => child.kill(), 20000);
     child.stderr.on('data', (chunk) => { output = `${output}${chunk}`.slice(0, 20000); });
     child.once('error', () => { clearTimeout(timer); resolve(''); });
@@ -520,7 +613,14 @@ function probeVideoCodec(executable, sourceUrl) {
 }
 
 async function prepareAudioStream(value) {
-  const sourceUrl = validateRealDebridStreamUrl(value?.url);
+  const live = Boolean(value?.live);
+  const sourceUrl = live ? validateLiveStreamUrl(value?.url) : validateRealDebridStreamUrl(value?.url);
+  const liveMeta = live ? liveStreamMeta.get(sourceUrl) || {} : {};
+  const inputArgs = [
+    ...(liveMeta.userAgent ? ['-user_agent', liveMeta.userAgent] : []),
+    ...(liveMeta.referrer ? ['-referer', liveMeta.referrer] : []),
+    ...(live ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4'] : []),
+  ];
   const executable = await findFfmpegExecutable();
   const id = randomUUID();
   const token = randomUUID();
@@ -535,7 +635,7 @@ async function prepareAudioStream(value) {
       return;
     }
     stream.started = true;
-    const codecReady = stream.transcodeVideo ? Promise.resolve('') : probeVideoCodec(executable, sourceUrl);
+    const codecReady = stream.transcodeVideo ? Promise.resolve('') : probeVideoCodec(executable, sourceUrl, inputArgs);
     codecReady.then((codec) => { stream.videoCodec = codec; }).catch(() => {}).then(() => {
       if (!response.destroyed) startFfmpeg(request, response);
     });
@@ -547,7 +647,7 @@ async function prepareAudioStream(value) {
       ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-vf', "scale=-2:'min(1080,ih)'"]
       : ['-c:v', 'copy', ...(stream.videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
     const args = [
-      '-hide_banner', '-loglevel', 'error', '-i', sourceUrl,
+      '-hide_banner', '-loglevel', 'error', ...inputArgs, '-i', sourceUrl,
       '-map', '0:v:0?', '-map', '0:a:0?',
       ...videoArgs, '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
       '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1',
@@ -885,7 +985,7 @@ function configureContentSecurityPolicy() {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https://image.tmdb.org https://*.mzstatic.com https://i.scdn.co https://covers.openlibrary.org https://archive.org https://*.archive.org",
+    "img-src 'self' data: https:",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
@@ -922,6 +1022,8 @@ function registerIpc() {
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('discovery:fetch', resultHandler(fetchDiscovery));
+  ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
+  ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));

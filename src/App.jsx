@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Icon, PosterCard, ScrollRow } from './ui.jsx';
+import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
 const RD_OAUTH = 'https://api.real-debrid.com/oauth/v2';
@@ -154,43 +156,6 @@ function makeDistinctShelves(shelves, excludedIds = [], limit = 12) {
     }
     return { ...shelf, items };
   }).filter((shelf) => shelf.items.length > 0);
-}
-
-function Icon({ name, size = 18, stroke = 1.8 }) {
-  const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: stroke, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true };
-  const paths = {
-    compass: <><circle cx="12" cy="12" r="9"/><path d="m15.6 8.4-2.5 5.1-5.1 2.5 2.5-5.1z"/></>,
-    film: <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4m-4 8h4m10-8h4m-4 8h4"/></>,
-    tv: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 2 4 3 4-3M8 22h8"/></>,
-    music: <><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></>,
-    book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 0 4 22z"/><path d="M4 5.5v14A2.5 2.5 0 0 1 6.5 17H20"/></>,
-    adult: <><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h2m6 0h2m-8 5a3 3 0 0 0 6 0"/><path d="M8 2v2m8-2v2"/></>,
-    bookmark: <><path d="M6 4.8A1.8 1.8 0 0 1 7.8 3h8.4A1.8 1.8 0 0 1 18 4.8V21l-6-3.8L6 21z"/></>,
-    download: <><path d="M12 3v12m-5-5 5 5 5-5"/><path d="M5 17v3h14v-3"/></>,
-    settings: <><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1a1.7 1.7 0 1 1-2.4 2.4l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.3a1.7 1.7 0 1 1-3.4 0v-.2a1.7 1.7 0 0 0-2.9-1.2l-.1.1a1.7 1.7 0 1 1-2.4-2.4l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.3a1.7 1.7 0 1 1 0-3.4h.2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a1.7 1.7 0 1 1 2.4-2.4l.1.1a1.7 1.7 0 0 0 2.9-1.2v-.3a1.7 1.7 0 1 1 3.4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a1.7 1.7 0 1 1 2.4 2.4l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.3a1.7 1.7 0 1 1 0 3.4h-.2a1.7 1.7 0 0 0-1.2 2.9z"/></>,
-    search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
-    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
-    chevron: <path d="m9 18 6-6-6-6"/>,
-    play: <path d="m8 5 12 7-12 7z" fill="currentColor" stroke="none"/>,
-    pause: <><path d="M8 5v14M16 5v14" strokeWidth="3"/></>,
-    skipBack: <><path d="M5 5v14" strokeWidth="2.5"/><path d="m19 6-10 6 10 6z" fill="currentColor" stroke="none"/></>,
-    skipForward: <><path d="M19 5v14" strokeWidth="2.5"/><path d="m5 6 10 6-10 6z" fill="currentColor" stroke="none"/></>,
-    volume: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13"/></>,
-    volumeOff: <><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 5 6m0-6-5 6"/></>,
-    captions: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4m-4 4h3m4-4h3m-3 4h4"/></>,
-    fullscreen: <><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></>,
-    plus: <><path d="M12 5v14M5 12h14"/></>,
-    check: <path d="m5 12 4 4L19 6"/>,
-    close: <><path d="m18 6-12 12M6 6l12 12"/></>,
-    external: <><path d="M14 3h7v7M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></>,
-    spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="m19 16 .8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></>,
-    link: <><path d="M10 13a5 5 0 0 0 7.1 0l3-3A5 5 0 0 0 13 2.9l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/></>,
-    cloud: <><path d="M20 16.2A4 4 0 0 0 18 8.5a6 6 0 0 0-11.7 1.4A4 4 0 0 0 7 18h11"/><path d="m12 12-3 3h2v4h2v-4h2z"/></>,
-    alert: <><path d="M10.3 4.3 2.9 17a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
-    refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></>,
-    trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></>,
-  };
-  return <svg {...common}>{paths[name] || paths.spark}</svg>;
 }
 
 function formatPlaybackTime(seconds) {
@@ -417,10 +382,11 @@ function App() {
     if (!DISCOVERY_PAGES.includes(activePage)) return;
     const current = discovery[activePage];
     if (current && current.status !== 'error') return;
+    if (activePage === 'tv' && tvMode !== 'shows') return;
     if ((activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey) return;
     if (activePage === 'adult' && !adultEnabled) return;
     loadDiscovery(activePage);
-  }, [activePage, adultEnabled, integrationSettings.tmdbApiKey]);
+  }, [activePage, tvMode, adultEnabled, integrationSettings.tmdbApiKey]);
 
   const discoveryLookup = useMemo(() => Object.values(discovery).flatMap((entry) => (entry.rows || []).flatMap((row) => row.items)), [discovery]);
   const discoveryPage = DISCOVERY_PAGES.includes(activePage) && (activePage !== 'adult' || adultEnabled);
@@ -564,7 +530,7 @@ function App() {
     if (!playing?.sourceUrl) return;
     setPlayerPlaybackError('');
     setPlaying((current) => current ? { ...current, url: '', id: '', converting: true } : current);
-    const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true });
+    const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true, live: Boolean(playing.live) });
     setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true } : current);
   };
 
@@ -866,6 +832,7 @@ function App() {
       audioStreamIdRef.current = stream.id;
       return { ...stream, sourceUrl };
     } catch (error) {
+      if (options.live) throw error;
       return { url: sourceUrl, sourceUrl, audioWarning: getError(error) };
     }
   };
@@ -914,6 +881,53 @@ function App() {
     setActiveEmbeddedTrack(track);
     setSubtitleLabel(track.label || track.language || 'Legendas originais do ficheiro');
     setSubtitleStatus('original');
+  };
+
+  const [tvMode, setTvMode] = useState('channels');
+  const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
+  const [liveCountries, setLiveCountries] = useState([]);
+  const [liveChannels, setLiveChannels] = useState({ status: 'idle', items: [], categories: [], message: '' });
+  const liveRequestRef = useRef(0);
+
+  const loadLiveChannels = useCallback(async (country) => {
+    if (!window.streamnexus?.isDesktop) {
+      setLiveChannels({ status: 'error', items: [], categories: [], message: 'Os canais ao vivo estão disponíveis na app desktop.' });
+      return;
+    }
+    const requestId = ++liveRequestRef.current;
+    setLiveChannels((current) => ({ ...current, status: 'loading', message: '' }));
+    try {
+      const [data, countries] = await Promise.all([window.streamnexus.fetchLiveChannels(country), window.streamnexus.fetchLiveCountries()]);
+      if (requestId !== liveRequestRef.current) return;
+      setLiveCountries(countries);
+      setLiveChannels({ status: 'ready', items: data.items, categories: data.categories, message: '' });
+    } catch (error) {
+      if (requestId === liveRequestRef.current) setLiveChannels({ status: 'error', items: [], categories: [], message: getError(error) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePage === 'tv' && tvMode === 'channels') loadLiveChannels(tvCountry);
+  }, [activePage, tvMode, tvCountry, loadLiveChannels]);
+
+  const changeTvCountry = (code) => {
+    setTvCountry(code);
+    try { localStorage.setItem('streamnexus.tv.country', code); } catch { /* preferência só nesta sessão */ }
+  };
+
+  const playLiveChannel = async (channel, streamIndex = 0) => {
+    const stream = channel.streams?.[streamIndex];
+    if (!stream) { notify('Este canal não tem emissões disponíveis.', 'error'); return; }
+    try {
+      const playbackStream = await preparePlayerAudio(stream.url, { live: true });
+      setEmbeddedSubtitleTracks([]);
+      setActiveEmbeddedTrack(null);
+      setPlayerPlaybackError('');
+      setSubtitleLabel('');
+      setTrailerPlaying(false);
+      setPlaying({ title: channel.title, ...playbackStream, pending: false, progress: 100, metadata: channel, fileName: '', live: { channel, index: streamIndex } });
+      setModal({ type: 'player' });
+    } catch (error) { notify(getError(error), 'error'); }
   };
 
   const [reading, setReading] = useState(loadReading);
@@ -1236,8 +1250,11 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
+        ) : activePage === 'tv' && tvMode === 'channels' && !query ? (
+          <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''}`}>
+            {activePage === 'tv' && <TvModeTabs mode={tvMode} onMode={setTvMode}/>}
             {genre === 'Todos' && activePage !== 'books' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
               <div className="hero-grain"></div><div className="hero-content"><div className="hero-kicker"><span className="live-mark"></span> {activePage === 'films' ? 'FILMES PARA DESCOBRIR' : activePage === 'series' ? 'SÉRIES EM DESTAQUE' : activePage === 'tv' ? 'PROGRAMAS EM DESTAQUE' : activePage === 'music' ? 'ÁLBUNS EM DESTAQUE' : activePage === 'books' ? 'LIVROS EM DESTAQUE' : activePage === 'adult' ? 'EM DESTAQUE' : catalogStatus === 'ready' ? 'EM ALTA ESTA SEMANA' : 'A TUA PRÓXIMA DESCOBERTA'}{activePage === 'home' && ` ${featuredTitle.type.toUpperCase()}`}</div><div className="hero-title-wrap"><span className="hero-title-small">{featuredTitle.creator || featuredTitle.original}</span><h1>{featuredTitle.title}</h1></div><p className="hero-copy">{featuredTitle.description}</p><div className="hero-meta">{featuredTitle.rating && <><span className="rating-star">★</span><strong>{featuredTitle.rating}</strong><i></i></>}<span>{featuredTitle.year || 'Recente'}</span><i></i><span>{featuredTitle.genre}</span><span className="quality-tag">{featuredTitle.type.toUpperCase()}</span></div><div className="hero-actions"><button className="button button-primary hero-play" onClick={() => openDetails(featuredTitle)}>{isVideoTitle(featuredTitle) ? <Icon name="play" size={17}/> : <Icon name="spark" size={17}/>}{isVideoTitle(featuredTitle) ? 'Ver agora' : 'Ver detalhes'}</button>{isVideoTitle(featuredTitle) && <button className="button button-glass" onClick={() => openDetails(featuredTitle)}>Mais informações <Icon name="chevron" size={15}/></button>}<button className={`hero-save ${saved.includes(featuredTitle.id) ? 'is-saved' : ''}`} aria-label="Adicionar à minha lista" onClick={() => toggleSaved(featuredTitle.id)}><Icon name={saved.includes(featuredTitle.id) ? 'check' : 'plus'} size={18}/></button></div></div>
               <div className="hero-pagination"><button aria-label="Anterior" className="hero-arrow" onClick={() => setHeroIndex((index) => (index - 1 + featuredTitles.length) % featuredTitles.length)}><Icon name="chevron" size={17}/></button><div><span className="current-slide">{String((heroIndex % featuredTitles.length) + 1).padStart(2, '0')}</span><span className="slide-track"><i style={{ width: `${((heroIndex % featuredTitles.length) + 1) / featuredTitles.length * 100}%` }}></i></span><span>{String(featuredTitles.length).padStart(2, '0')}</span></div><button aria-label="Seguinte" className="hero-arrow" onClick={() => setHeroIndex((index) => (index + 1) % featuredTitles.length)}><Icon name="chevron" size={17}/></button></div>
@@ -1246,7 +1263,7 @@ function App() {
 
             {activePage === 'books' && <ReadingDashboard reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved} onGoal={setReadingGoal}/>}
             {activePage === 'books' && <div className="section-heading rd-discover"><div><span className="eyebrow">NOVAS LEITURAS</span><h2>Descobrir livros</h2></div></div>}
-            {activePage !== 'home' && <div className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</div>}
+            {activePage !== 'home' && <ScrollRow className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</ScrollRow>}
 
             {discoveryPage && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (!['tv', 'adult'].includes(activePage) || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
               {(activePage === 'tv' || activePage === 'adult') && !integrationSettings.tmdbApiKey ? <><strong>Liga o TMDB para ver este catálogo</strong><p>Adiciona a API key do TMDB nas definições para carregar os títulos em destaque.</p><button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar TMDB <Icon name="chevron" size={14}/></button></>
@@ -1362,13 +1379,13 @@ function App() {
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.url} onClick={togglePlayerPlayback} onError={handleVideoError}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
-            {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>Confirma a ligação ou tenta abrir o ficheiro original.</span>{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
+            {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
               <div className="player-title"><span className="eyebrow">A REPRODUZIR A PARTIR DA TUA NUVEM</span><strong>{playing?.title}</strong>{playing?.audioWarning && <small className="audio-hint">O áudio pode não ser compatível. {playing.audioWarning} Também podes abrir com VLC.</small>}</div>
-              <div className="player-top-actions"><span className="quality-tag">REAL-DEBRID</span>{playing?.sourceUrl && <button className="player-icon-button" aria-label="Abrir com VLC" title="Abrir com VLC" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={19}/></button>}<button className="player-icon-button" aria-label="Fechar filme" title="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close" size={21}/></button></div>
+              <div className="player-top-actions"><span className="quality-tag">{playing?.live ? 'AO VIVO' : 'REAL-DEBRID'}</span>{playing?.sourceUrl && !playing?.live && <button className="player-icon-button" aria-label="Abrir com VLC" title="Abrir com VLC" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={19}/></button>}<button className="player-icon-button" aria-label="Fechar filme" title="Fechar" onClick={() => { setModal(null); setPlaying(null); setSubtitleTrackUrl(''); setEmbeddedSubtitleTracks([]); }}><Icon name="close" size={21}/></button></div>
             </div>
 
             {subtitleMenuOpen && <section className="subtitle-panel">
@@ -1492,19 +1509,6 @@ function ReadingDashboard({ reading, saved, onOpen, onSave, onGoal }) {
         : <div className="poster-row">{list.map((entry, index) => <PosterCard key={entry.book.id} item={entry.book} index={index} rank={null} saved={saved.includes(entry.book.id)} onOpen={() => onOpen(entry.book)} onSave={() => onSave(entry.book.id)}/>)}</div>}
     </section>)}
   </section>;
-}
-
-function PosterCard({ item, index, saved, onOpen, onSave, rank }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} poster-${item.type === 'Álbum' ? 'music' : item.type === 'Livro' ? 'book' : 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
-    {rank && <span className="poster-rank">{rank}</span>}
-    <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
-      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img src={item.poster} alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageFailed(true)}/>}
-      <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
-    </button>
-    <button className={`poster-save ${saved ? 'saved' : ''}`} aria-label={saved ? 'Remover da lista' : 'Adicionar à lista'} onClick={onSave}><Icon name={saved ? 'check' : 'plus'} size={15}/></button>
-    <button className="poster-title" onClick={onOpen}>{item.title}</button><div className="poster-sub"><span>{item.creator ? item.creator : <>{item.year} <i>·</i> {item.genre}</>}</span>{item.rating && <span className="poster-rating">★ {item.rating}</span>}</div>
-  </article>;
 }
 
 function formatBytes(bytes = 0) {
