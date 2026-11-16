@@ -63,6 +63,9 @@ function pickPlayableEntry(details, titleHint) {
 }
 
 // Escolha automática do melhor lançamento: qualidade, fonte, seeders e tamanho razoável.
+// O Real-Debrid recusa (infringing_file) lançamentos pelo NOME; estas etiquetas são as mais reportadas (desde 2026).
+const RD_FLAGGED = /WEB[ ._-]?DL|WEB[ ._-]?x264|WEB[ ._-]?H264|WEB[ ._-]?Rip|BD[ ._-]?Rip|HD[ ._-]?Rip|DVD[ ._-]?Rip|HDTV[ ._-]x264|HDTV[ ._-]XviD|BluRay[ ._-]x264|\d+p[ ._-]BluRay[ ._-]DTS|\[(rartv|rarbg|eztv)\]|\bYTS\b/i;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BAD_RELEASE = /\b(cam|hdcam|camrip|ts|hdts|telesync|tc|telecine|hdtc|scr|screener|dvdscr|workprint|r5|pre[ -]?dvd|hq[ -]?pre)\b/i;
 const normalizeName = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 function scoreRelease(release, title) {
@@ -74,8 +77,14 @@ function scoreRelease(release, title) {
   else if (/1080p/.test(name)) score += 40;
   else if (/720p/.test(name)) score += 26;
   else if (/480p|dvdrip|xvid/.test(name)) score += 4;
-  if (/web dl|webdl|webrip|bluray|blu ray|bdrip|brrip|hdrip/.test(name)) score += 12;
-  if (/remux/.test(name)) score -= 12;
+  if (/bluray|blu ray|remux/.test(name)) score += 12; else if (/web dl|webdl|webrip|brrip/.test(name)) score += 4;
+  if (RD_FLAGGED.test(raw)) score -= 60;
+  if (title.type === 'Série') {
+    // Séries: preferir packs de temporada/série completa; entre episódios soltos, o primeiro
+    if (/\bs\d{1,2}\b(?!e\d)|complete|temporada|season/.test(name) && !/\bs\d{1,2}e\d{1,3}\b/.test(name)) score += 15;
+    else if (/\bs0?1e0?1\b/.test(name)) score += 8;
+    else if (/\bs\d{1,2}e\d{1,3}\b/.test(name)) score -= 6;
+  }
   if (/x264|h 264|\bavc\b/.test(name)) score += 8; else if (/x265|h 265|hevc/.test(name)) score += 3;
   if (/10bit|\bhdr\b|dolby vision|\bdv\b/.test(name)) score -= 6;
   if (/multi|dual|\bpt\b|portugu|legendado/.test(name)) score += 4;
@@ -95,7 +104,7 @@ function scoreRelease(release, title) {
   return score;
 }
 
-const friendlyRdError = (message, tried = 0) => (/infringing_file/i.test(message) ? `O Real-Debrid bloqueou ${tried > 1 ? `as ${tried} versões que tentei` : 'este ficheiro'} (infração de direitos de autor). Isto é comum em estreias muito recentes. Tenta mais tarde, ou escolhe outra versão à mão na lista do filme.` : message);
+const friendlyRdError = (message, tried = 0) => (/infringing_file/i.test(message) ? `O Real-Debrid recusou ${tried > 1 ? `as ${tried} versões que tentei` : 'este ficheiro'} (erro de infração). Desde 2026 filtra pelo nome do lançamento (WEB-DL, WEBRip, BDRip, HDRip…) e, depois de vários pedidos seguidos, pode recusar tudo durante alguns minutos. Espera um pouco e tenta de novo, ou escolhe à mão uma versão BluRay/Remux na lista do filme.` : message);
 const RD_STATUS_TEXT = { magnet_conversion: 'A obter os metadados do torrent', waiting_files_selection: 'A escolher o ficheiro de vídeo', queued: 'Na fila do Real-Debrid', downloading: 'A transferir no Real-Debrid', compressing: 'A comprimir', uploading: 'A preparar o ficheiro', downloaded: 'Pronto' };
 
 const titles = [
@@ -770,7 +779,7 @@ function App() {
           if (cancelled) return true;
           setPlaying((current) => (current?.torrentId === playing.torrentId ? { ...current, torrentId: added.id, candidateIndex: index, startedAt: Date.now(), fileName: release.title, releaseTitle: release.title, progress: 0, transferStatus: 'magnet_conversion', error: '', switched: (current.switched || 0) + 1 } : current));
           return true;
-        } catch { index += 1; }
+        } catch { index += 1; if (index < candidates.length && !cancelled) await sleep(3000); }
       }
       return false;
     };
@@ -1568,7 +1577,7 @@ function App() {
       const items = reuse || await window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] });
       const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title) })).sort((a, b) => b.score - a.score);
       const good = ranked.filter((entry) => entry.score > -150);
-      const candidates = (good.length ? good : ranked).slice(0, 12).map((entry) => entry.release);
+      const candidates = (good.length ? good : ranked).slice(0, 8).map((entry) => entry.release);
       triedCount = candidates.length;
       if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o Prowlarr nas Integrações.');
       setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[0].title } : current));
@@ -1577,7 +1586,15 @@ function App() {
       let index = 0;
       let lastError = null;
       for (; index < candidates.length && !added; index += 1) {
-        try { added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: candidates[index].id, token: active.access_token }); } catch (error) { lastError = error; }
+        try { added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: candidates[index].id, token: active.access_token }); }
+        catch (error) {
+          lastError = error;
+          if (index + 1 < candidates.length) {
+            setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[index + 1].title, attempt: index + 2, attemptTotal: candidates.length } : current));
+            await sleep(3000);
+            if (autoPlayRef.current !== runId) return;
+          }
+        }
       }
       if (!added) throw lastError || new Error('O Real-Debrid recusou todas as versões.');
       index -= 1;
@@ -1802,7 +1819,7 @@ function App() {
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
-            {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? 'A enviar para o Real-Debrid…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+            {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? `A enviar para o Real-Debrid${playing.attempt > 1 ? ` (versão ${playing.attempt} de ${playing.attemptTotal})` : ''}…` : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
