@@ -2069,6 +2069,50 @@ async function searchProwlarr({ query, type, categories = [] } = {}) {
   return rows;
 }
 
+// ---- Torrentio (addon do Stremio): lançamentos por IMDb, com infoHash e ficheiro exato ----
+// Só pedimos a lista pública; a chave do Real-Debrid nunca sai desta app.
+const TORRENTIO_BASE = 'https://torrentio.strem.fun';
+async function fetchTorrentioReleases({ tmdbId, tmdbType, season = 1, episode = 1 } = {}) {
+  if (!/^\d+$/.test(String(tmdbId || '')) || !['movie', 'tv'].includes(tmdbType)) throw new Error('Título inválido para o Torrentio.');
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const external = await memo(`imdb|${tmdbType}|${tmdbId}`, () => tmdbRequest(`/${tmdbType}/${tmdbId}/external_ids`, tmdbApiKey), 24 * 60 * 60 * 1000);
+  const imdb = String(external?.imdb_id || '');
+  if (!/^tt\d{5,10}$/.test(imdb)) throw new Error('Este título não tem IMDb ID.');
+  const safeSeason = Math.max(1, Math.min(Number(season) || 1, 99));
+  const safeEpisode = Math.max(1, Math.min(Number(episode) || 1, 999));
+  const route = tmdbType === 'movie' ? `stream/movie/${imdb}` : `stream/series/${imdb}:${safeSeason}:${safeEpisode}`;
+  const data = await memo(`torrentio|${route}`, () => fetchPublicJson(`${TORRENTIO_BASE}/${route}.json`, 25000), 10 * 60 * 1000);
+  const sizeUnits = { TB: 1024 ** 4, GB: 1024 ** 3, MB: 1024 ** 2, KB: 1024 };
+  const seen = new Set();
+  const rows = [];
+  for (const stream of data?.streams || []) {
+    const hash = String(stream.infoHash || '').toLowerCase();
+    if (!/^[a-f0-9]{40}$/.test(hash)) continue;
+    const key = `${hash}:${stream.fileIdx ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lines = String(stream.title || '').split('\n');
+    const meta = lines.find((line) => line.includes('👤')) || '';
+    const sizeMatch = /💾\s*([\d.]+)\s*(TB|GB|MB|KB)/i.exec(meta);
+    const release = {
+      title: lines[0] || stream.behaviorHints?.filename || 'Lançamento',
+      magnetUrl: `magnet:?xt=urn:btih:${hash}`,
+      infoHash: hash,
+      protocol: 'torrent',
+      indexer: `Torrentio · ${/⚙️\s*(\S+)/.exec(meta)?.[1] || 'torrent'}`,
+      size: sizeMatch ? Number(sizeMatch[1]) * sizeUnits[sizeMatch[2].toUpperCase()] : Number(stream.behaviorHints?.videoSize) || 0,
+      seeders: Number(/👤\s*(\d+)/.exec(meta)?.[1]) || 0,
+    };
+    const id = randomUUID();
+    if (releaseCache.size > 5000) releaseCache.delete(releaseCache.keys().next().value);
+    releaseCache.set(id, { release, baseUrl: '', apiKey: '' });
+    rows.push({ id, title: release.title, indexer: release.indexer, size: release.size, seeders: release.seeders, leechers: null, protocol: 'torrent', hasMagnet: true, canGrab: true, infoHash: hash, fileName: String(stream.behaviorHints?.filename || ''), fileIdx: Number.isInteger(stream.fileIdx) ? stream.fileIdx : null, source: 'torrentio' });
+    if (rows.length >= 300) break;
+  }
+  return rows;
+}
+
 async function testProwlarr(value = {}) {
   const base = String(value.prowlarrUrl || '').trim().replace(/\/+$/, '');
   const key = String(value.prowlarrApiKey || '').trim();
@@ -2254,6 +2298,7 @@ function registerIpc() {
   ipcMain.handle('integrations:write', (_event, value) => writeIntegrations(value));
   ipcMain.handle('prowlarr:search', resultHandler(searchProwlarr));
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
+  ipcMain.handle('torrentio:releases', resultHandler(fetchTorrentioReleases));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));

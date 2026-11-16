@@ -69,7 +69,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BAD_RELEASE = /\b(cam|hdcam|camrip|ts|hdts|telesync|tc|telecine|hdtc|scr|screener|dvdscr|workprint|r5|pre[ -]?dvd|hq[ -]?pre)\b/i;
 const normalizeName = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 function scoreRelease(release, title) {
-  const raw = String(release.title || '');
+  const raw = `${release.title || ''} ${release.fileName || ''}`.trim();
   const name = ` ${normalizeName(raw)} `;
   let score = 0;
   if (BAD_RELEASE.test(raw.replace(/[._]/g, ' '))) score -= 1000;
@@ -764,6 +764,7 @@ function App() {
     let cancelled = false;
     let timer;
     let polls = 0;
+    let downloadingSince = 0;
     const nextDelay = () => (polls < 12 ? 2000 : 7000);
     // Passa para o próximo melhor lançamento (apaga o atual do Real-Debrid); devolve false se não houver mais
     const switchToNext = async () => {
@@ -791,13 +792,15 @@ function App() {
         // Escolha automática do ficheiro: só o maior vídeo nos filmes (o Real-Debrid transfere menos e fica pronto mais depressa)
         if (details.status === 'waiting_files_selection') {
           const videos = (details.files || []).filter((file) => VIDEO_FILE_PATTERN.test(file.path || ''));
-          const files = playing.metadata?.type === 'Filme' && videos.length ? String([...videos].sort((a, b) => (b.bytes || 0) - (a.bytes || 0))[0].id) : 'all';
+          const files = playing.metadata?.type === 'Filme' && videos.length ? String([...videos].sort((a, b) => (b.bytes || 0) - (a.bytes || 0))[0].id) : videos.length ? videos.map((file) => file.id).join(',') : 'all';
           await callRd(`/torrents/selectFiles/${encodeURIComponent(playing.torrentId)}`, { method: 'POST', body: { files } });
           if (!cancelled) timer = window.setTimeout(poll, 1200);
           return;
         }
         if (details.links?.length) {
-          const picked = pickPlayableEntry(details, playing.metadata);
+          const wantedFile = String(playing.candidates?.[playing.candidateIndex || 0]?.fileName || '').toLowerCase();
+          const exact = wantedFile ? getPlayableEntries(details).find((entry) => entry.name.split('/').pop().toLowerCase() === wantedFile) : null;
+          const picked = exact ? { entry: exact } : pickPlayableEntry(details, playing.metadata);
           if (picked.choose) {
             setPlaying(null);
             setModal({ type: 'files', torrent: { id: playing.torrentId, filename: details.filename }, titleHint: playing.metadata, entries: picked.choose });
@@ -824,8 +827,10 @@ function App() {
           return;
         }
         // Torrent que não arranca (sem cache e quase sem progresso): troca para o próximo melhor lançamento
-        const stalled = ['downloading', 'queued', 'magnet_conversion', 'compressing', 'uploading'].includes(details.status) && Number(details.progress || 0) < 5;
-        if (playing.candidates && playing.startedAt && stalled && Date.now() - playing.startedAt > 25000 && await switchToNext()) return;
+        if (['downloading', 'queued'].includes(details.status)) { if (!downloadingSince) downloadingSince = Date.now(); } else downloadingSince = 0;
+        const notCached = downloadingSince && Date.now() - downloadingSince > 9000 && Number(details.progress || 0) < 5;
+        const noMetadata = ['magnet_conversion', 'compressing', 'uploading'].includes(details.status) && playing.startedAt && Date.now() - playing.startedAt > 40000;
+        if (playing.candidates && playing.startedAt && (notCached || noMetadata) && await switchToNext()) return;
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, progress: Number(details.progress || 0), transferStatus: details.status } : current);
         timer = window.setTimeout(poll, nextDelay());
       } catch (error) {
@@ -1573,13 +1578,18 @@ function App() {
     let triedCount = 0;
     try {
       const category = SEARCH_CATEGORIES[titleCategory(title)] || SEARCH_CATEGORIES.movies;
+      const prowlarrReady = Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey);
       const reuse = releaseSearch?.titleId === title.id && releaseSearch.status === 'found' ? releaseSearch.items : null;
-      const items = reuse || await window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] });
+      const [fromTorrentio, fromProwlarr] = await Promise.all([
+        title.tmdbId ? window.streamnexus.searchTorrentio({ tmdbId: title.tmdbId, tmdbType: title.tmdbType || (title.type === 'Série' ? 'tv' : 'movie'), season: 1, episode: 1 }).catch(() => []) : [],
+        reuse || (prowlarrReady ? window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] }).catch(() => []) : []),
+      ]);
+      const items = [...fromTorrentio, ...fromProwlarr];
       const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title) })).sort((a, b) => b.score - a.score);
       const good = ranked.filter((entry) => entry.score > -150);
       const candidates = (good.length ? good : ranked).slice(0, 8).map((entry) => entry.release);
       triedCount = candidates.length;
-      if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o Prowlarr nas Integrações.');
+      if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o TMDB e o Prowlarr nas Integrações.');
       setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[0].title } : current));
       const active = await refreshSession(session);
       let added = null;
@@ -1607,7 +1617,7 @@ function App() {
   const startPlayback = (title) => {
     if (!session?.access_token) { setModal({ type: 'connect' }); return; }
     if (rdSearch?.titleId === title.id && rdSearch.matches?.length) { openTorrentStream(rdSearch.matches[0], title); return; }
-    if (window.streamnexus?.isDesktop && integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey && isVideoTitle(title)) { autoPlayBest(title); return; }
+    if (window.streamnexus?.isDesktop && isVideoTitle(title) && ((integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey) || (integrationSettings.tmdbApiKey && title.tmdbId))) { autoPlayBest(title); return; }
     setMagnet('');
     setModal({ type: 'magnet', title });
   };

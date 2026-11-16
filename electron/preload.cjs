@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   loadIntegrations: () => ipcRenderer.invoke('integrations:read'),
   saveIntegrations: (value) => ipcRenderer.invoke('integrations:write', value),
   searchReleases: (value) => invokeRequest('prowlarr:search', value),
+  searchTorrentio: (value) => invokeRequest('torrentio:releases', value),
   testProwlarr: (value) => invokeRequest('prowlarr:test', value),
   addReleaseToRealDebrid: (value) => invokeRequest('prowlarr:add-release', value),
   fetchCatalog: () => invokeRequest('tmdb:catalog'),
