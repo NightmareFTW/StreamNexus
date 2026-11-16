@@ -420,6 +420,7 @@ let spotifyPlayerServer = null;
 let spotifyPlayerState = { ready: false, deviceId: '', error: '' };
 let spotifyPlayerLastError = { message: '', at: 0 };
 let spotifyLicenseFailures = [];
+let spotifyInAppBroken = false; // licença DRM recusada: usa outro dispositivo até reiniciar a app
 const SPOTIFY_LICENSE_HELP = 'O Spotify recusou a licença de DRM (erro 500): o Electron da app precisa da assinatura VMP gratuita da castlabs. Corre «npm run sign:widevine» na pasta do projeto e segue os passos (ver README).';
 const spotifyPlayerLogPath = () => path.join(app.getPath('userData'), 'spotify-player.log');
 function logSpotifyPlayer(line) {
@@ -504,7 +505,9 @@ async function ensureSpotifyPlayer() {
           spotifyLicenseFailures = spotifyLicenseFailures.filter((time) => now - time < 15000).concat(now);
           if (spotifyLicenseFailures.length >= 3) {
             spotifyPlayerLastError = { message: SPOTIFY_LICENSE_HELP, at: now };
+            spotifyInAppBroken = true;
             spotifyUserApi('PUT', '/me/player/pause').catch(() => {});
+            setTimeout(() => closeSpotifyPlayer(), 1500);
           }
         }
       });
@@ -530,7 +533,7 @@ async function spotifyConnectStatus() {
   const { spotifyClientId } = await readIntegrations();
   const user = await loadSpotifyUser();
   const streaming = String(user?.scope || '').split(' ').includes('streaming');
-  return { configured: Boolean(spotifyClientId), connected: Boolean(user?.refreshToken), redirectUri: SPOTIFY_REDIRECT_URI, name: user?.name || '', inApp: WIDEVINE_AVAILABLE, needsReconnect: Boolean(user?.refreshToken && WIDEVINE_AVAILABLE && !streaming) };
+  return { configured: Boolean(spotifyClientId), connected: Boolean(user?.refreshToken), redirectUri: SPOTIFY_REDIRECT_URI, name: user?.name || '', inApp: WIDEVINE_AVAILABLE && !spotifyInAppBroken, inAppBlocked: spotifyInAppBroken, needsReconnect: Boolean(user?.refreshToken && WIDEVINE_AVAILABLE && !streaming) };
 }
 
 async function spotifyConnectLogin() {
@@ -627,7 +630,7 @@ async function spotifyAlbumTracks(value = {}) {
 async function spotifyConnectCommand(value = {}) {
   const action = String(value.action || '');
   const withDevice = async (run) => {
-    if (WIDEVINE_AVAILABLE) {
+    if (WIDEVINE_AVAILABLE && !spotifyInAppBroken) {
       const deviceId = await ensureSpotifyPlayer();
       let lastError;
       for (let attempt = 0; attempt < 4; attempt += 1) {
