@@ -959,3 +959,8 @@ html, body { background: #070707; }
 
 /* Ver agora automático: versão escolhida */
 .player-release { max-width: min(560px, 80vw); overflow: hidden; color: #8d8d99; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* Ecrã de preparação do leitor: sem barra de controlos e com ícone de erro */
+.player-modal.is-preparing .player-bottom { display: none; }
+.player-error-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: #ff7a82; background: rgba(229,9,20,.14); }

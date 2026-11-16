@@ -95,6 +95,7 @@ function scoreRelease(release, title) {
   return score;
 }
 
+const friendlyRdError = (message) => (/infringing_file/i.test(message) ? 'O Real-Debrid bloqueou este ficheiro (infração de direitos de autor) e não há outra versão disponível para tentar.' : message);
 const RD_STATUS_TEXT = { magnet_conversion: 'A obter os metadados do torrent', waiting_files_selection: 'A escolher o ficheiro de vídeo', queued: 'Na fila do Real-Debrid', downloading: 'A transferir no Real-Debrid', compressing: 'A comprimir', uploading: 'A preparar o ficheiro', downloaded: 'Pronto' };
 
 const titles = [
@@ -755,6 +756,24 @@ function App() {
     let timer;
     let polls = 0;
     const nextDelay = () => (polls < 12 ? 2000 : 7000);
+    // Passa para o próximo melhor lançamento (apaga o atual do Real-Debrid); devolve false se não houver mais
+    const switchToNext = async () => {
+      const candidates = playing.candidates || [];
+      let index = (playing.candidateIndex || 0) + 1;
+      if (!candidates.length || index >= candidates.length) return false;
+      callRd(`/torrents/delete/${encodeURIComponent(playing.torrentId)}`, { method: 'DELETE' }).catch(() => {});
+      const active = await refreshSession(session);
+      while (index < candidates.length) {
+        const release = candidates[index];
+        try {
+          const added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: release.id, token: active.access_token });
+          if (cancelled) return true;
+          setPlaying((current) => (current?.torrentId === playing.torrentId ? { ...current, torrentId: added.id, candidateIndex: index, startedAt: Date.now(), fileName: release.title, releaseTitle: release.title, progress: 0, transferStatus: 'magnet_conversion', error: '', switched: (current.switched || 0) + 1 } : current));
+          return true;
+        } catch { index += 1; }
+      }
+      return false;
+    };
     const poll = async () => {
       try {
         polls += 1;
@@ -776,7 +795,9 @@ function App() {
             return;
           }
           const chosenLink = details.links[picked.entry?.linkIndex ?? 0];
-          const unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: chosenLink } });
+          let unrestricted;
+          try { unrestricted = await callRd('/unrestrict/link', { method: 'POST', body: { link: chosenLink } }); }
+          catch (error) { if (cancelled) return; if (await switchToNext()) return; throw error; }
           if (cancelled) return;
           const sourceUrl = unrestricted.download || chosenLink;
           const playbackStream = await preparePlayerAudio(sourceUrl);
@@ -789,27 +810,21 @@ function App() {
           return;
         }
         if (['dead', 'error', 'virus', 'magnet_error'].includes(details.status)) {
+          if (await switchToNext()) return;
           setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, pending: false, error: 'O Real-Debrid não conseguiu preparar este ficheiro.' } : current);
           return;
         }
         // Torrent que não arranca (sem cache e quase sem progresso): troca para o próximo melhor lançamento
         const stalled = ['downloading', 'queued', 'magnet_conversion', 'compressing', 'uploading'].includes(details.status) && Number(details.progress || 0) < 5;
-        if (playing.candidates && playing.startedAt && stalled && Date.now() - playing.startedAt > 25000 && (playing.candidateIndex || 0) + 1 < playing.candidates.length) {
-          const nextIndex = (playing.candidateIndex || 0) + 1;
-          const nextRelease = playing.candidates[nextIndex];
-          callRd(`/torrents/delete/${encodeURIComponent(playing.torrentId)}`, { method: 'DELETE' }).catch(() => {});
-          const active = await refreshSession(session);
-          const added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: nextRelease.id, token: active.access_token });
-          if (cancelled) return;
-          setPlaying((current) => (current?.torrentId === playing.torrentId ? { ...current, torrentId: added.id, candidateIndex: nextIndex, startedAt: Date.now(), fileName: nextRelease.title, releaseTitle: nextRelease.title, progress: 0, transferStatus: 'magnet_conversion', switched: (current.switched || 0) + 1 } : current));
-          return;
-        }
+        if (playing.candidates && playing.startedAt && stalled && Date.now() - playing.startedAt > 25000 && await switchToNext()) return;
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, progress: Number(details.progress || 0), transferStatus: details.status } : current);
         timer = window.setTimeout(poll, nextDelay());
       } catch (error) {
         if (cancelled) return;
-        setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: getError(error) } : current);
-        timer = window.setTimeout(poll, 12000);
+        const message = friendlyRdError(getError(error));
+        const final = /infringing|bloquead|blocked|not_available|file_unavailable|permission_denied/i.test(`${getError(error)} ${message}`);
+        setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: message, ...(final ? { pending: false } : {}) } : current);
+        if (!final) timer = window.setTimeout(poll, 12000);
       }
     };
     poll();
@@ -1556,10 +1571,17 @@ function App() {
       if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o Prowlarr nas Integrações.');
       setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[0].title } : current));
       const active = await refreshSession(session);
-      const added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: candidates[0].id, token: active.access_token });
-      setPlaying((current) => (mine(current) ? { ...current, phase: 'preparing', torrentId: added.id, candidates, candidateIndex: 0, startedAt: Date.now(), fileName: candidates[0].title, releaseTitle: candidates[0].title, transferStatus: 'magnet_conversion' } : current));
+      let added = null;
+      let index = 0;
+      let lastError = null;
+      for (; index < candidates.length && !added; index += 1) {
+        try { added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: candidates[index].id, token: active.access_token }); } catch (error) { lastError = error; }
+      }
+      if (!added) throw lastError || new Error('O Real-Debrid recusou todas as versões.');
+      index -= 1;
+      setPlaying((current) => (mine(current) ? { ...current, phase: 'preparing', torrentId: added.id, candidates, candidateIndex: index, startedAt: Date.now(), fileName: candidates[index].title, releaseTitle: candidates[index].title, transferStatus: 'magnet_conversion' } : current));
     } catch (error) {
-      setPlaying((current) => (mine(current) ? { ...current, pending: false, error: getError(error) } : current));
+      setPlaying((current) => (mine(current) ? { ...current, pending: false, error: friendlyRdError(getError(error)) } : current));
     }
   };
 
@@ -1773,12 +1795,12 @@ function App() {
 
         {modal.type === 'files' && <div className="modal-card files-modal"><button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button><span className="eyebrow">REAL-DEBRID · VÁRIOS FICHEIROS</span><h2>Escolhe o que reproduzir</h2><p className="connect-lead">Este torrent tem {modal.entries.length} vídeos. Seleciona o episódio ou ficheiro que queres ver.</p><div className="files-list">{modal.entries.map((entry) => <button key={entry.linkIndex} className="files-option" onClick={() => openTorrentStream(modal.torrent, modal.titleHint, entry.linkIndex)}><span><Icon name="play" size={14}/><strong title={entry.name}>{entry.name}</strong></span><small>{formatBytes(entry.bytes)}</small></button>)}</div></div>}
 
-        {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
+        {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'} ${playing?.url ? '' : 'is-preparing'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
-            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? 'A enviar para o Real-Debrid…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+            {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? 'A enviar para o Real-Debrid…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
