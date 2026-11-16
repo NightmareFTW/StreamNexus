@@ -1191,6 +1191,70 @@ const adultVideosFeed = {
   },
 };
 
+// --- Pesquisa por separador: resultados paginados e completos ---
+const ADULTV_SEARCH = { rt: { ordering: 'mostviewed' }, ph: { ordering: 'mostviewed' }, ep: 'most-popular' };
+
+async function tmdbSearchPage(type, query, cursor, adultOnly = false) {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const page = Math.max(1, Math.min(Number(cursor) || 1, 200));
+  const data = await memo(`tmdbs|${type}|${adultOnly}|${query}|${page}`, () => tmdbRequest(`/search/${type}?language=pt-PT&query=${encodeURIComponent(query)}&include_adult=${adultOnly}&page=${page}`, tmdbApiKey), 5 * 60 * 1000);
+  const items = (data.results || [])
+    .filter((item) => item.poster_path && (type !== 'multi' || ['movie', 'tv'].includes(item.media_type)) && (!adultOnly || item.adult))
+    .map((item) => {
+      const mediaType = type === 'multi' ? item.media_type : type;
+      const base = normalizeTmdbItem({ ...item, media_type: mediaType, ...(mediaType === 'tv' ? { title: undefined } : {}) }, baseUrl, sizes);
+      return adultOnly ? { ...base, adult: true } : base;
+    });
+  return { items, cursor: page + 1, hasMore: page < Math.min(data.total_pages || 1, 200) };
+}
+
+async function musicSearchPage(query, cursor) {
+  const offset = Math.max(0, Number(cursor) || 0);
+  const settings = await readIntegrations();
+  if (settings.spotifyClientId && settings.spotifyClientSecret) {
+    try {
+      const token = await spotifyAccessToken(settings.spotifyClientId, settings.spotifyClientSecret);
+      const data = await memo(`spotify-s|${query}|${offset}`, () => spotifyGet(token, '/search', { q: query, type: 'album', market: 'PT', offset: String(offset) }), 5 * 60 * 1000);
+      const list = data.albums?.items || [];
+      const seen = new Set();
+      const items = list.filter((album) => album?.id && album.name && album.images?.length && !seen.has(album.id) && seen.add(album.id)).map((album, index) => normalizeSpotifyAlbum(album, { genre: 'Música', title: 'Música' }, index));
+      if (items.length) return { items, cursor: offset + list.length, hasMore: offset + list.length < 900 };
+    } catch { /* usa o iTunes como alternativa */ }
+  }
+  const all = await itunesAlbums(query);
+  return { items: all.slice(offset, offset + 30), cursor: offset + 30, hasMore: offset + 30 < all.length };
+}
+
+async function bookSearchPage(query, cursor) {
+  const offset = Math.max(0, Number(cursor) || 0);
+  const data = await memo(`books-s|${query}|${offset}`, () => fetchPublicJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&fields=key,title,author_name,cover_i,first_publish_year&limit=30&offset=${offset}`), 5 * 60 * 1000);
+  const docs = data.docs || [];
+  const items = docs.filter((work) => work.title && work.key).map((work, index) => normalizeBook(work, { genre: 'Livros' }, index));
+  return { items, cursor: offset + 30, hasMore: docs.length > 0 && offset + docs.length < (data.numFound || 0) && offset < 1000 };
+}
+
+const SEARCHES = {
+  home: (query, cursor) => tmdbSearchPage('multi', query, cursor),
+  films: (query, cursor) => tmdbSearchPage('movie', query, cursor),
+  series: (query, cursor) => tmdbSearchPage('tv', query, cursor),
+  tv: (query, cursor) => tmdbSearchPage('tv', query, cursor),
+  adult: (query, cursor) => tmdbSearchPage('movie', query, cursor, true),
+  music: musicSearchPage,
+  books: bookSearchPage,
+  adultvideos: (query, cursor, ctx) => adultVideosPage(ADULTV_SEARCH, query.toLowerCase().replace(/[^\p{L}\p{N} -]/gu, ' ').replace(/\s+/g, ' ').trim(), ctx.orientation, cursor),
+};
+
+async function feedSearch(value = {}) {
+  const run = SEARCHES[value.kind];
+  if (!run) throw new Error('Tipo de pesquisa inválido.');
+  const query = String(value.query || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!query) return { items: [], cursor: 1, hasMore: false };
+  const cursor = value.cursor ?? (['music', 'books'].includes(value.kind) ? 0 : 1);
+  return withTimeout(run(query, cursor, { orientation: feedOrientation(value.orientation) }));
+}
+
 const FEEDS = { films: tmdbFeed('movie'), series: tmdbFeed('tv'), tv: tmdbFeed('tv'), music: musicFeed, books: bookFeed, adult: adultCinemaFeed, adultvideos: adultVideosFeed };
 const feedOrientation = (value) => (ADULT_ORIENTATIONS[value] ? value : 'straight');
 
@@ -1825,6 +1889,7 @@ function registerIpc() {
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));
   ipcMain.handle('discovery:fetch', resultHandler(fetchDiscovery));
   ipcMain.handle('feed:shelf', resultHandler(feedShelf));
+  ipcMain.handle('feed:search', resultHandler(feedSearch));
   ipcMain.handle('feed:shelves', resultHandler(feedShelves));
   ipcMain.handle('feed:category', resultHandler(feedCategory));
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));

@@ -86,7 +86,7 @@ function Rail({ shelf, index, kind, orientation, seen, renderCard, activePage, o
   </section>;
 }
 
-function CategoryGrid({ kind, category, orientation, renderCard }) {
+function CategoryGrid({ kind, category, orientation, renderCard, mode = 'category', query = '' }) {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState('loading');
   const [loadingMore, setLoadingMore] = useState(false);
@@ -96,18 +96,18 @@ function CategoryGrid({ kind, category, orientation, renderCard }) {
 
   const loadPage = useCallback(async () => {
     const current = state.current;
-    if (current.busy || !current.hasMore || !window.streamnexus?.feedCategory) return;
+    if (current.busy || !current.hasMore || !(mode === 'search' ? window.streamnexus?.feedSearch : window.streamnexus?.feedCategory)) return;
     current.busy = true;
     const run = current.run;
     setLoadingMore(true);
     try {
       let fresh = [];
       for (let attempt = 0; attempt < 3 && !fresh.length && current.hasMore; attempt += 1) {
-        const page = await window.streamnexus.feedCategory({ kind, category, cursor: current.cursor, orientation });
+        const page = await (mode === 'search' ? window.streamnexus.feedSearch({ kind, query, cursor: current.cursor, orientation }) : window.streamnexus.feedCategory({ kind, category, cursor: current.cursor, orientation }));
         if (run !== state.current.run) return;
         current.cursor = page.cursor;
         current.hasMore = Boolean(page.hasMore);
-        fresh = (page.items || []).filter((item) => item.id && item.poster && !current.seen.has(item.id));
+        fresh = (page.items || []).filter((item) => item.id && (item.poster || (mode === 'search' && kind === 'books')) && !current.seen.has(item.id));
       }
       fresh.forEach((item) => current.seen.add(item.id));
       current.total = (current.total || 0) + fresh.length;
@@ -122,20 +122,20 @@ function CategoryGrid({ kind, category, orientation, renderCard }) {
     } finally {
       if (run === state.current.run) { current.busy = false; setLoadingMore(false); setTick((value) => value + 1); }
     }
-  }, [kind, category, orientation]);
+  }, [kind, category, orientation, mode, query]);
 
   useEffect(() => {
     state.current = { cursor: undefined, hasMore: true, busy: false, seen: new Set(), run: state.current.run + 1, total: 0 };
     setItems([]); setStatus('loading'); setMessage('');
     loadPage();
-  }, [kind, category, orientation]);
+  }, [kind, category, orientation, mode, query]);
 
   const sentinel = useVisible(loadPage, status === 'ready' && state.current.hasMore, tick);
 
   return <section className="content-section category-feed">
-    <div className="section-heading"><div><span className="eyebrow">CATEGORIA</span><h2>{category}</h2></div></div>
+    <div className="section-heading"><div><span className="eyebrow">{mode === 'search' ? 'PESQUISA' : 'CATEGORIA'}</span><h2>{mode === 'search' ? `Resultados para “${query}”` : category}</h2></div></div>
     {status === 'error' && <div className="empty-list catalog-empty"><span><Icon name="alert" size={22}/></span><strong>Não foi possível carregar esta categoria</strong><p className="is-error-text">{message}</p><button className="text-link" onClick={() => { state.current = { ...state.current, cursor: undefined, hasMore: true, busy: false, seen: new Set(), run: state.current.run + 1, total: 0 }; setItems([]); setStatus('loading'); loadPage(); }}>Tentar novamente <Icon name="refresh" size={14}/></button></div>}
-    {status === 'empty' && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outra categoria ou volta a ver tudo.</p></div>}
+    {status === 'empty' && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>{mode === 'search' ? 'Sem resultados' : 'Sem títulos nesta categoria'}</strong><p>{mode === 'search' ? 'Experimenta outras palavras ou verifica a ortografia.' : 'Experimenta outra categoria ou volta a ver tudo.'}</p></div>}
     <div className={`infinite-grid grid-${SKELETON_KIND[kind] || 'video'}`}>
       {items.map((item, index) => renderCard(item, index % 12, null))}
       {(status === 'loading' || loadingMore) && <Skeleton kind={kind} count={status === 'loading' ? 12 : 6}/>}
@@ -182,4 +182,14 @@ export function FeedShelves({ kind, shelves, genre, activePage, orientation = ''
     </div>
     {genre !== 'Todos' && <CategoryGrid key={`${kind}|${genre}|${orientation}`} kind={kind} category={genre} orientation={orientation} renderCard={renderCard}/>}
   </>;
+}
+
+export function SearchFeed({ kind, query, orientation = '', renderCard }) {
+  const [debounced, setDebounced] = useState(query.trim());
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(query.trim()), 350);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  if (!debounced) return null;
+  return <CategoryGrid key={`${kind}|${orientation}|${debounced}`} mode="search" query={debounced} kind={kind} category={debounced} orientation={orientation} renderCard={renderCard}/>;
 }

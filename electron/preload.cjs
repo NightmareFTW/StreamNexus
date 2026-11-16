@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   openLink: (url) => invokeRequest('app:open-link', { url }),
   prepareLiveHls: (url) => invokeRequest('player:prepare-hls', { url }),
   feedShelf: (value) => invokeRequest('feed:shelf', value),
+  feedSearch: (value) => invokeRequest('feed:search', value),
   feedShelves: (value) => invokeRequest('feed:shelves', value),
   feedCategory: (value) => invokeRequest('feed:category', value),
   fetchTrailer: (value) => invokeRequest('tmdb:trailer', value),

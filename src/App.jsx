@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 import { FreeMusicPanel } from './Music.jsx';
-import { FeedShelves } from './Feed.jsx';
+import { FeedShelves, SearchFeed } from './Feed.jsx';
 import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
@@ -1156,15 +1156,25 @@ function App() {
   };
   const setReadingGoal = (goal) => persistReading({ ...reading, goal });
 
-  const toggleSaved = (id) => {
-    const next = saved.includes(id) ? saved.filter((item) => item !== id) : [...saved, id];
+  const [savedItems, setSavedItems] = useState(() => { try { return JSON.parse(localStorage.getItem('streamnexus.watchlist.items')) || {}; } catch { return {}; } });
+  const toggleSaved = (id, item) => {
+    const adding = !saved.includes(id);
+    const next = adding ? [...saved, id] : saved.filter((entry) => entry !== id);
     setSaved(next);
     localStorage.setItem('streamnexus.watchlist', JSON.stringify(next));
+    if (item) {
+      setSavedItems((current) => {
+        const copy = { ...current };
+        if (adding) copy[id] = item; else delete copy[id];
+        try { localStorage.setItem('streamnexus.watchlist.items', JSON.stringify(copy)); } catch { /* cópia só nesta sessão */ }
+        return copy;
+      });
+    }
     notify(saved.includes(id) ? 'Removido da tua lista.' : 'Adicionado à tua lista.');
   };
 
   const searchResults = useMemo(() => {
-    let result = activePage === 'watchlist' ? [...new Map([...catalogTitles, ...discoveryLookup].map((item) => [item.id, item])).values()] : catalogTitles;
+    let result = activePage === 'watchlist' ? [...new Map([...catalogTitles, ...discoveryLookup, ...Object.values(savedItems)].map((item) => [item.id, item])).values()] : catalogTitles;
     if (activePage === 'films') result = result.filter((item) => item.type === 'Filme');
     if (activePage === 'series') result = result.filter((item) => item.type === 'Série');
     if (activePage === 'watchlist') result = result.filter((item) => saved.includes(item.id));
@@ -1174,7 +1184,7 @@ function App() {
     }
     if (genre !== 'Todos') result = result.filter((item) => item.genre === genre || item.genres?.includes(genre));
     return result;
-  }, [activePage, catalogTitles, discoveryLookup, genre, query, saved]);
+  }, [activePage, catalogTitles, discoveryLookup, savedItems, genre, query, saved]);
 
   useEffect(() => { setVisibleCount(24); }, [activePage, genre, query]);
 
@@ -1194,7 +1204,7 @@ function App() {
     }
   };
 
-  const selectedTitle = catalogTitles.find((item) => item.id === modal?.id) || discoveryLookup.find((item) => item.id === modal?.id) || Object.values(reading.shelf).map((entry) => entry.book).find((item) => item.id === modal?.id);
+  const selectedTitle = catalogTitles.find((item) => item.id === modal?.id) || discoveryLookup.find((item) => item.id === modal?.id) || Object.values(reading.shelf).map((entry) => entry.book).find((item) => item.id === modal?.id) || savedItems[modal?.id] || (modal?.item && modal.item.id === modal.id ? modal.item : undefined);
   useEffect(() => {
     if (modal?.type !== 'details' || selectedTitle?.type !== 'Livro' || !window.streamnexus?.isDesktop) return undefined;
     const book = selectedTitle;
@@ -1247,6 +1257,13 @@ function App() {
       ], [featuredTitle.id]);
 
   const feedKind = FEED_KINDS[activePage] || '';
+  const hasTmdbKey = Boolean(integrationSettings.tmdbApiKey);
+  const searchKind = !query.trim() || !window.streamnexus?.isDesktop ? '' : ({
+    home: hasTmdbKey ? 'home' : '', films: hasTmdbKey ? 'films' : '', series: hasTmdbKey ? 'series' : '',
+    tv: tvMode === 'shows' && hasTmdbKey ? 'tv' : '', music: 'music', books: 'books',
+    adult: adultEnabled ? (adultMode === 'videos' ? 'adultvideos' : hasTmdbKey ? 'adult' : '') : '',
+  })[activePage] || '';
+  const searchPlaceholder = ({ home: 'Pesquisar filmes e séries', films: 'Pesquisar filmes', series: 'Pesquisar séries', tv: tvMode === 'channels' ? 'Pesquisar canais' : 'Pesquisar programas', music: 'Pesquisar álbuns e artistas', books: 'Pesquisar livros e autores', adult: adultMode === 'videos' ? 'Pesquisar vídeos' : 'Pesquisar cinema para adultos', watchlist: 'Pesquisar na minha lista' })[activePage] || 'Pesquisar títulos';
   const pagedShelves = browsingShelves.map((shelf) => { const feedId = FEED_SHELF_IDS[activePage]?.[shelf.title]; return feedId ? { ...shelf, feedId, cursor: 2, hasMore: true } : shelf; });
   const visibleBrowsingShelves = genre === 'Todos' ? browsingShelves : makeDistinctShelves(
     browsingShelves.map((shelf) => ({ ...shelf, items: shelf.items.filter((item) => item.genre === genre || item.genres?.includes(genre)) })),
@@ -1392,7 +1409,7 @@ function App() {
   };
 
   const openDetails = (title) => {
-    setModal({ type: 'details', id: title.id });
+    setModal({ type: 'details', id: title.id, item: title });
     setTrailer({ status: 'loading', key: '', name: '' });
     setTrailerPlaying(false);
     const requestId = ++trailerRequestRef.current;
@@ -1425,7 +1442,7 @@ function App() {
 
         <form className="sidebar-search" role="search" onSubmit={(event) => event.preventDefault()}>
           <Icon name="search" size={15}/>
-          <input type="search" aria-label="Pesquisar no catálogo" placeholder="Pesquisar títulos" value={query} onChange={(event) => { setQuery(event.target.value); if (!['home', 'films', 'series', 'watchlist'].includes(activePage)) setActivePage('home'); setProfileMenuOpen(false); }}/>
+          <input type="search" aria-label="Pesquisar neste separador" placeholder={searchPlaceholder} value={query} onChange={(event) => { setQuery(event.target.value); if (!['home', 'films', 'series', 'tv', 'music', 'books', 'adult', 'watchlist'].includes(activePage)) setActivePage('home'); setProfileMenuOpen(false); }}/>
         </form>
         <div className="side-section">
           <nav className="side-nav" aria-label="Navegação principal">
@@ -1471,8 +1488,10 @@ function App() {
               {rdItems.length ? <div className="torrent-list">{rdItems.map((torrent) => <TorrentRow key={torrent.id} torrent={torrent} onPlay={() => openTorrentStream(torrent)} onSelect={() => selectTorrentFiles(torrent.id)} onDelete={async () => { try { await callRd(`/torrents/delete/${encodeURIComponent(torrent.id)}`, { method: 'DELETE' }); await loadRdAccount(); notify('Item removido da tua conta.'); } catch (error) { setRdError(getError(error)); } }} />)}</div> : <div className="empty-list"><span><Icon name="film" size={22}/></span><strong>Ainda não há conteúdo aqui</strong><p>Adiciona um magnet para o enviares para a tua conta Real-Debrid.</p><button className="text-link" onClick={() => setModal({ type: 'magnet' })}>Adicionar o primeiro magnet <Icon name="chevron" size={14}/></button></div>}
             </>}
           </section>
-        ) : activePage === 'tv' && tvMode === 'channels' && !query ? (
-          <LiveTvPage mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} health={liveHealth} showOffline={showOffline} onShowOffline={setShowOffline} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
+        ) : searchKind ? (
+          <div className="home-page page-in catalog-browse-page search-page"><SearchFeed kind={searchKind} query={query} orientation={searchKind === 'adultvideos' ? adultOrientation : ''} renderCard={(item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} hideSave={searchKind === 'adultvideos'} onOpen={() => (searchKind === 'adultvideos' ? setModal({ type: 'embed', item }) : openDetails(item))} onSave={() => toggleSaved(item.id, item)}/>}/></div>
+        ) : activePage === 'tv' && tvMode === 'channels' ? (
+          <LiveTvPage externalFilter={query} mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} health={liveHealth} showOffline={showOffline} onShowOffline={setShowOffline} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
           <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
@@ -1496,7 +1515,7 @@ function App() {
                 : discoveryState?.status === 'error' ? <><strong>Não foi possível carregar {DISCOVERY_LABELS[activePage]}</strong><p className="is-error-text">{discoveryState.message}</p><button className="text-link" onClick={() => loadDiscovery(activePage)}>Tentar novamente <Icon name="refresh" size={14}/></button></>
                   : <><strong>A carregar {DISCOVERY_LABELS[activePage]}…</strong><p>A reunir os títulos em destaque.</p></>}
             </div>}
-            {showDiscover && feedKind && <FeedShelves key={feedKind} kind={feedKind} shelves={pagedShelves} genre={genre} activePage={activePage} renderCard={(item, index, rank) => <PosterCard key={item.id} item={item} index={index} rank={rank} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id)}/>} onViewAll={(page) => { setActivePage(page); setQuery(''); }}/>}
+            {showDiscover && feedKind && <FeedShelves key={feedKind} kind={feedKind} shelves={pagedShelves} genre={genre} activePage={activePage} renderCard={(item, index, rank) => <PosterCard key={item.id} item={item} index={index} rank={rank} saved={saved.includes(item.id)} onOpen={() => openDetails(item)} onSave={() => toggleSaved(item.id, item)}/>} onViewAll={(page) => { setActivePage(page); setQuery(''); }}/>}
             {!feedKind && genre !== 'Todos' && showDiscover && visibleBrowsingShelves.length === 0 && <div className="empty-list catalog-empty"><span><Icon name="search" size={22}/></span><strong>Sem títulos nesta categoria</strong><p>Experimenta outro género ou volta a ver tudo.</p></div>}
             {(showDiscover && !feedKind ? visibleBrowsingShelves : []).map((shelf, shelfIndex) => <section className={`content-section discovery-rail ${shelfIndex === 0 ? 'discover-section' : ''}`} key={shelf.title}>
               <div className="section-heading"><div><span className="eyebrow">{shelf.eyebrow}</span><h2>{shelf.title}</h2></div><div className="section-controls">{shelf.page !== activePage && <button className="view-all" onClick={() => { setActivePage(shelf.page); setQuery(''); }}>{shelf.page === 'series' ? 'Todas as séries' : 'Explorar catálogo'} <Icon name="chevron" size={14}/></button>}<div className="arrow-pair"><button aria-label="Anterior" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: -500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button><button aria-label="Seguinte" onClick={(event) => event.currentTarget.closest('.content-section').querySelector('.poster-row').scrollBy({ left: 500, behavior: 'smooth' })}><Icon name="chevron" size={16}/></button></div></div></div>

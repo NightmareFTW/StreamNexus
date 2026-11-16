@@ -7,7 +7,7 @@ export function TvModeTabs({ mode, onMode }) {
   </div>;
 }
 
-export function LiveTvPage({ mode, onMode, countries, country, onCountry, state, health, showOffline, onShowOffline, onPlay, onRetry }) {
+export function LiveTvPage({ externalFilter = '', mode, onMode, countries, country, onCountry, state, health, showOffline, onShowOffline, onPlay, onRetry }) {
   const [category, setCategory] = useState('Todos');
   const [filter, setFilter] = useState('');
   const [resolvedLogos, setResolvedLogos] = useState({});
@@ -39,7 +39,7 @@ export function LiveTvPage({ mode, onMode, countries, country, onCountry, state,
   }, [items]);
   const activeCategory = category === 'Todos' || categories.some((entry) => entry.label === category) ? category : 'Todos';
 
-  const term = filter.trim().toLowerCase();
+  const term = (externalFilter || filter).trim().toLowerCase();
   const visible = useMemo(() => items.filter((item) => (activeCategory === 'Todos' || item.genres.includes(activeCategory)) && (!term || item.title.toLowerCase().includes(term))), [items, activeCategory, term]);
   const sections = useMemo(() => {
     if (activeCategory !== 'Todos' || term) return [];

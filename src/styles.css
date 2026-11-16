@@ -886,3 +886,8 @@ html, body { background: #070707; }
 .skeleton-line.wide { width: 220px; height: 18px; }
 @keyframes feed-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
 @media (prefers-reduced-motion: reduce) { .poster-skeleton .poster-image, .skeleton-line { animation: none; } }
+
+
+/* Pesquisa por separador */
+.search-page { padding-top: 28px; }
+.search-page .category-feed { margin-top: 0; }
