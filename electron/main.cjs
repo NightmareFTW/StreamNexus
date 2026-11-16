@@ -482,6 +482,20 @@ async function ensureSpotifyPlayer() {
     });
     spotifyPlayerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     spotifyPlayerWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+    // Diagnóstico: consola do leitor (inclui o iframe do SDK), processos que caem e pedidos de rede falhados
+    spotifyPlayerWindow.webContents.on('console-message', (...args) => {
+      const detail = args[0] && typeof args[0] === 'object' && 'message' in args[0] ? args[0] : { level: args[1], message: args[2], sourceId: args[4] };
+      logSpotifyPlayer(`console[${detail.level}] ${String(detail.message).slice(0, 400)} ${String(detail.sourceId || '').split('?')[0].slice(-80)}`);
+    });
+    spotifyPlayerWindow.webContents.on('render-process-gone', (_event, details) => logSpotifyPlayer(`render-process-gone ${JSON.stringify(details)}`));
+    spotifyPlayerWindow.webContents.on('did-fail-load', (_event, code, description, url) => logSpotifyPlayer(`did-fail-load ${code} ${description} ${String(url).split('?')[0]}`));
+    const playerSession = spotifyPlayerWindow.webContents.session;
+    if (!playerSession.__streamnexusNetLog) {
+      playerSession.__streamnexusNetLog = true;
+      const shortUrl = (value) => { try { const url = new URL(value); return `${url.host}${url.pathname}`.slice(0, 160); } catch { return String(value).slice(0, 160); } };
+      playerSession.webRequest.onErrorOccurred((details) => { if (details.error !== 'net::ERR_ABORTED') logSpotifyPlayer(`net-error ${details.error} ${shortUrl(details.url)}`); });
+      playerSession.webRequest.onCompleted((details) => { if (details.statusCode >= 400 || /licen[sc]e|widevine|drm/i.test(details.url)) logSpotifyPlayer(`http ${details.statusCode} ${details.method} ${shortUrl(details.url)}`); });
+    }
     spotifyPlayerWindow.on('closed', () => { spotifyPlayerWindow = null; spotifyPlayerState = { ready: false, deviceId: '', error: '' }; spotifyPlayerServer?.close(); spotifyPlayerServer = null; });
     spotifyPlayerWindow.loadURL(`http://127.0.0.1:${spotifyPlayerServer.address().port}/`);
   }
