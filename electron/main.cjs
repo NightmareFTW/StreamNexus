@@ -636,17 +636,43 @@ const ADULT_ORIENTATIONS = {
   trans: { rt: 'Transgender', ph: 'transgender', ep: '0', epTerm: 'trans' },
 };
 
+const redtubeThumbCache = new Map();
+async function redtubeRealThumb(videoId) {
+  const key = String(videoId);
+  const hit = redtubeThumbCache.get(key);
+  if (hit && Date.now() - hit.at < 6 * 60 * 60 * 1000) return hit.url;
+  let url = '';
+  try {
+    const response = await fetch(`https://embed.redtube.com/?id=${encodeURIComponent(key)}`, { headers: { 'User-Agent': ADULT_UA }, signal: AbortSignal.timeout(8000) });
+    const match = /"image_url":"([^"]+)"/.exec(await response.text());
+    if (match) url = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  } catch { url = ''; }
+  if (/^https:\/\/[^/]*rdtcdn\.com\//i.test(url)) redtubeThumbCache.set(key, { at: Date.now(), url });
+  else url = '';
+  return url;
+}
+
+async function mapLimit(list, limit, worker) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, async () => {
+    while (next < list.length) { const index = next; next += 1; await worker(list[index], index); }
+  }));
+}
+
 async function fetchRedtubeVideos({ ordering, period }, term, orientation, page = 1) {
   const category = ADULT_ORIENTATIONS[orientation]?.rt;
   const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: String(page), ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://api.redtube.com/?${params}`);
-  return (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
+  const items = (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, '', video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name)));
+  await mapLimit(items, 8, async (item) => { const url = await redtubeRealThumb(item.id.slice('xxx-rt-'.length)); item.poster = url; item.backdrop = url; });
+  return items.filter((item) => item.poster);
 }
 
 async function fetchPornhubVideos({ ordering, period }, term, orientation, page = 1) {
   const category = ADULT_ORIENTATIONS[orientation]?.ph;
   const params = new URLSearchParams({ ordering, thumbsize: 'large', page: String(page), ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
-  const data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
+  let data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
+  if (!data.videos?.length && period) { params.delete('period'); data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`); }
   return (data.videos || []).filter((video) => orientation !== 'straight' || video.segment !== 'gay').map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
 }
 
@@ -1762,6 +1788,14 @@ function configureContentSecurityPolicy() {
     "base-uri 'self'",
     "frame-ancestors 'none'",
   ].join('; ');
+  // Os CDNs de miniaturas recusam pedidos sem Referer do próprio site (hotlink protection)
+  const thumbReferers = [['rdtcdn.com', 'https://www.redtube.com/'], ['phncdn.com', 'https://www.pornhub.com/'], ['eporner.com', 'https://www.eporner.com/']];
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['*://*.rdtcdn.com/*', '*://*.phncdn.com/*', '*://*.eporner.com/*'] }, (details, callback) => {
+    let host = '';
+    try { host = new URL(details.url).hostname.toLowerCase(); } catch { host = ''; }
+    const entry = details.resourceType === 'image' ? thumbReferers.find(([domain]) => host === domain || host.endsWith(`.${domain}`)) : null;
+    callback({ requestHeaders: entry ? { ...details.requestHeaders, Referer: entry[1] } : details.requestHeaders });
+  });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const isAppResponse = details.url.startsWith('file://') || details.url.startsWith(DEV_URL);
     if (!isAppResponse) {
