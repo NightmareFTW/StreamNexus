@@ -62,6 +62,41 @@ function pickPlayableEntry(details, titleHint) {
   return { choose: [...entries].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
 }
 
+// Escolha automática do melhor lançamento: qualidade, fonte, seeders e tamanho razoável.
+const BAD_RELEASE = /\b(cam|hdcam|camrip|ts|hdts|telesync|tc|telecine|hdtc|scr|screener|dvdscr|workprint|r5|pre[ -]?dvd|hq[ -]?pre)\b/i;
+const normalizeName = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+function scoreRelease(release, title) {
+  const raw = String(release.title || '');
+  const name = ` ${normalizeName(raw)} `;
+  let score = 0;
+  if (BAD_RELEASE.test(raw.replace(/[._]/g, ' '))) score -= 1000;
+  if (/2160p|\b4k\b|\buhd\b/.test(name)) score += 6;
+  else if (/1080p/.test(name)) score += 40;
+  else if (/720p/.test(name)) score += 26;
+  else if (/480p|dvdrip|xvid/.test(name)) score += 4;
+  if (/web dl|webdl|webrip|bluray|blu ray|bdrip|brrip|hdrip/.test(name)) score += 12;
+  if (/remux/.test(name)) score -= 12;
+  if (/x264|h 264|\bavc\b/.test(name)) score += 8; else if (/x265|h 265|hevc/.test(name)) score += 3;
+  if (/10bit|\bhdr\b|dolby vision|\bdv\b/.test(name)) score -= 6;
+  if (/multi|dual|\bpt\b|portugu|legendado/.test(name)) score += 4;
+  score += Math.min(40, Math.log10((Number(release.seeders) || 0) + 1) * 12);
+  const gb = (Number(release.size) || 0) / 1024 ** 3;
+  if (gb > 6) score -= Math.min(45, (gb - 6) * 3);
+  if (gb > 0 && gb < 0.7) score -= 15;
+  // o lançamento tem de ser do título certo (e do ano certo)
+  const wanted = normalizeName(title.original || title.title).split(' ').filter((word) => word.length > 1);
+  const matched = wanted.filter((word) => name.includes(` ${word} `)).length;
+  if (wanted.length && matched / wanted.length < 0.6) score -= 200;
+  const year = Number(title.year) || 0;
+  if (year && title.type === 'Filme') {
+    const years = [...name.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map((entry) => Number(entry[1]));
+    if (years.includes(year)) score += 6; else if (years.length) score -= 15;
+  }
+  return score;
+}
+
+const RD_STATUS_TEXT = { magnet_conversion: 'A obter os metadados do torrent', waiting_files_selection: 'A escolher o ficheiro de vídeo', queued: 'Na fila do Real-Debrid', downloading: 'A transferir no Real-Debrid', compressing: 'A comprimir', uploading: 'A preparar o ficheiro', downloaded: 'Pronto' };
+
 const titles = [
   { id: 'dune2', title: 'Dune: Parte Dois', original: 'Dune: Part Two', type: 'Filme', year: 2024, rating: '8.6', genre: 'Ficção científica', runtime: '2h 46m', poster: 'https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg', backdrop: 'https://image.tmdb.org/t/p/w1280/xOMo8BRK7PfcJv9JCnx7s5hj0PX.jpg', description: 'Paul Atreides une-se a Chani e aos Fremen numa jornada de vingança e destino, entre as areias de Arrakis.', tag: 'EM DESTAQUE', accent: '#c28d5d' },
   { id: 'oppenheimer', title: 'Oppenheimer', original: 'Oppenheimer', type: 'Filme', year: 2023, rating: '8.3', genre: 'Drama', runtime: '3h 00m', poster: 'https://image.tmdb.org/t/p/w500/ptpr0kGAckfQkJeJIt8st5dglvd.jpg', backdrop: 'https://image.tmdb.org/t/p/w1280/ptpr0kGAckfQkJeJIt8st5dglvd.jpg', description: 'A história do físico J. Robert Oppenheimer e do papel que desempenhou na criação da bomba atómica.', tag: 'MAIS VISTO', accent: '#c77a46' },
@@ -718,10 +753,21 @@ function App() {
     if (!playing?.pending || !playing.torrentId) return undefined;
     let cancelled = false;
     let timer;
+    let polls = 0;
+    const nextDelay = () => (polls < 12 ? 2000 : 7000);
     const poll = async () => {
       try {
+        polls += 1;
         const details = await callRd(`/torrents/info/${encodeURIComponent(playing.torrentId)}`);
         if (cancelled) return;
+        // Escolha automática do ficheiro: só o maior vídeo nos filmes (o Real-Debrid transfere menos e fica pronto mais depressa)
+        if (details.status === 'waiting_files_selection') {
+          const videos = (details.files || []).filter((file) => VIDEO_FILE_PATTERN.test(file.path || ''));
+          const files = playing.metadata?.type === 'Filme' && videos.length ? String([...videos].sort((a, b) => (b.bytes || 0) - (a.bytes || 0))[0].id) : 'all';
+          await callRd(`/torrents/selectFiles/${encodeURIComponent(playing.torrentId)}`, { method: 'POST', body: { files } });
+          if (!cancelled) timer = window.setTimeout(poll, 1200);
+          return;
+        }
         if (details.links?.length) {
           const picked = pickPlayableEntry(details, playing.metadata);
           if (picked.choose) {
@@ -746,8 +792,20 @@ function App() {
           setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, pending: false, error: 'O Real-Debrid não conseguiu preparar este ficheiro.' } : current);
           return;
         }
+        // Torrent que não arranca (sem cache e quase sem progresso): troca para o próximo melhor lançamento
+        const stalled = ['downloading', 'queued', 'magnet_conversion', 'compressing', 'uploading'].includes(details.status) && Number(details.progress || 0) < 5;
+        if (playing.candidates && playing.startedAt && stalled && Date.now() - playing.startedAt > 25000 && (playing.candidateIndex || 0) + 1 < playing.candidates.length) {
+          const nextIndex = (playing.candidateIndex || 0) + 1;
+          const nextRelease = playing.candidates[nextIndex];
+          callRd(`/torrents/delete/${encodeURIComponent(playing.torrentId)}`, { method: 'DELETE' }).catch(() => {});
+          const active = await refreshSession(session);
+          const added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: nextRelease.id, token: active.access_token });
+          if (cancelled) return;
+          setPlaying((current) => (current?.torrentId === playing.torrentId ? { ...current, torrentId: added.id, candidateIndex: nextIndex, startedAt: Date.now(), fileName: nextRelease.title, releaseTitle: nextRelease.title, progress: 0, transferStatus: 'magnet_conversion', switched: (current.switched || 0) + 1 } : current));
+          return;
+        }
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, progress: Number(details.progress || 0), transferStatus: details.status } : current);
-        timer = window.setTimeout(poll, 7000);
+        timer = window.setTimeout(poll, nextDelay());
       } catch (error) {
         if (cancelled) return;
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: getError(error) } : current);
@@ -1473,9 +1531,42 @@ function App() {
     searchTitleInLibrary(title);
     searchReleaseSources(title.searchQuery || title.original || title.title, titleCategory(title), title.id);
   };
+  const autoPlayRef = useRef(0);
+  // "Ver agora": se já está na biblioteca, abre; senão escolhe sozinho o melhor lançamento, envia-o para o
+  // Real-Debrid e abre o leitor, que começa assim que o ficheiro estiver pronto (logo, se estiver em cache).
+  const autoPlayBest = async (title) => {
+    const runId = ++autoPlayRef.current;
+    const mine = (current) => current && current.runId === runId;
+    setEmbeddedSubtitleTracks([]);
+    setActiveEmbeddedTrack(null);
+    setPlayerPlaybackError('');
+    setSubtitleLabel('');
+    setSubtitleTrackUrl('');
+    setActiveSubId('');
+    setTrailerPlaying(false);
+    setPlaying({ title: title.title, url: '', pending: true, phase: 'searching', progress: 0, metadata: title, fileName: title.title, torrentId: '', runId });
+    setModal({ type: 'player' });
+    try {
+      const category = SEARCH_CATEGORIES[titleCategory(title)] || SEARCH_CATEGORIES.movies;
+      const reuse = releaseSearch?.titleId === title.id && releaseSearch.status === 'found' ? releaseSearch.items : null;
+      const items = reuse || await window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] });
+      const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title) })).sort((a, b) => b.score - a.score);
+      const good = ranked.filter((entry) => entry.score > -150);
+      const candidates = (good.length ? good : ranked).slice(0, 4).map((entry) => entry.release);
+      if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o Prowlarr nas Integrações.');
+      setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[0].title } : current));
+      const active = await refreshSession(session);
+      const added = await window.streamnexus.addReleaseToRealDebrid({ releaseId: candidates[0].id, token: active.access_token });
+      setPlaying((current) => (mine(current) ? { ...current, phase: 'preparing', torrentId: added.id, candidates, candidateIndex: 0, startedAt: Date.now(), fileName: candidates[0].title, releaseTitle: candidates[0].title, transferStatus: 'magnet_conversion' } : current));
+    } catch (error) {
+      setPlaying((current) => (mine(current) ? { ...current, pending: false, error: getError(error) } : current));
+    }
+  };
+
   const startPlayback = (title) => {
     if (!session?.access_token) { setModal({ type: 'connect' }); return; }
     if (rdSearch?.titleId === title.id && rdSearch.matches?.length) { openTorrentStream(rdSearch.matches[0], title); return; }
+    if (window.streamnexus?.isDesktop && integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey && isVideoTitle(title)) { autoPlayBest(title); return; }
     setMagnet('');
     setModal({ type: 'magnet', title });
   };
@@ -1687,7 +1778,7 @@ function App() {
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
-            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
+            {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? 'A enviar para o Real-Debrid…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">

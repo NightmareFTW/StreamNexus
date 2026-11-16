@@ -2014,6 +2014,21 @@ function pURL(base, pathname) {
   return new URL(pathname.replace(/^\/+/, ''), root);
 }
 
+// O Prowlarr pode devolver o magnet em campos diferentes conforme a versão/indexador:
+//  - magnetUrl/downloadUrl como `magnet:?…`
+//  - magnetUrl como endereço HTTP do próprio Prowlarr (proxy), downloadUrl vazio
+//  - o magnet verdadeiro no `guid` e o hash em `infoHash`
+const magnetOnly = (value) => { const text = String(value || '').trim(); return /^magnet:\?/i.test(text) ? text : ''; };
+const httpOnly = (value) => { const text = String(value || '').trim(); return /^https?:\/\//i.test(text) ? text : ''; };
+function releaseMagnet(release) {
+  const direct = magnetOnly(release.magnetUrl) || magnetOnly(release.downloadUrl) || magnetOnly(release.guid);
+  if (direct) return direct;
+  const hash = String(release.infoHash || '').trim();
+  if (/^[A-Fa-f0-9]{40}$/.test(hash) || /^[A-Za-z2-7]{32}$/.test(hash)) return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(String(release.title || '').slice(0, 200))}`;
+  return '';
+}
+const releaseLink = (release) => httpOnly(release.downloadUrl) || httpOnly(release.magnetUrl);
+
 async function searchProwlarr({ query, type, categories = [] } = {}) {
   const settings = await readIntegrations();
   if (!settings.prowlarrUrl || !settings.prowlarrApiKey) throw new Error('Configura primeiro o endereço e a API key do Prowlarr.');
@@ -2034,7 +2049,7 @@ async function searchProwlarr({ query, type, categories = [] } = {}) {
   }
   const rows = data.filter((release) => {
     const protocol = String(release.protocol || '').toLowerCase();
-    return ['torrent', '1'].includes(protocol) || (!protocol && (String(release.magnetUrl || '').startsWith('magnet:') || String(release.downloadUrl || '').startsWith('magnet:')));
+    return ['torrent', '1'].includes(protocol) || (!protocol && Boolean(releaseMagnet(release)));
   }).map((release) => {
     const id = randomUUID();
     if (releaseCache.size > 5000) releaseCache.delete(releaseCache.keys().next().value);
@@ -2047,8 +2062,8 @@ async function searchProwlarr({ query, type, categories = [] } = {}) {
       seeders: Number.isFinite(Number(release.seeders)) ? Number(release.seeders) : null,
       leechers: Number.isFinite(Number(release.leechers)) ? Number(release.leechers) : null,
       protocol: release.protocol || 'torrent',
-      hasMagnet: Boolean(release.magnetUrl || String(release.downloadUrl || '').startsWith('magnet:')),
-      canGrab: Boolean(release.magnetUrl || release.downloadUrl),
+      hasMagnet: Boolean(releaseMagnet(release)),
+      canGrab: Boolean(releaseMagnet(release) || releaseLink(release)),
     };
   });
   return rows;
@@ -2068,11 +2083,12 @@ async function testProwlarr(value = {}) {
 
 async function fetchReleaseMagnet(entry) {
   const { release, baseUrl, apiKey } = entry;
-  const direct = String(release.magnetUrl || release.downloadUrl || '');
-  if (direct.startsWith('magnet:?')) return direct;
-  if (!release.downloadUrl) throw new Error('Este resultado não disponibiliza um link magnet nem um ficheiro torrent.');
+  const magnet = releaseMagnet(release);
+  if (magnet) return magnet;
+  const link = releaseLink(release);
+  if (!link) throw new Error('Este resultado não disponibiliza um link magnet nem um ficheiro torrent.');
   let current;
-  try { current = new URL(release.downloadUrl); } catch { throw new Error('O link de transferência deste resultado não é válido.'); }
+  try { current = new URL(link); } catch { throw new Error('O link de transferência deste resultado não é válido.'); }
   if (!['http:', 'https:'].includes(current.protocol)) throw new Error('O tipo de link deste resultado não é suportado.');
   if (current.username || current.password) throw new Error('O link de transferência deste resultado não é válido.');
   const trustedOrigin = new URL(baseUrl).origin;
