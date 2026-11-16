@@ -2113,6 +2113,21 @@ async function fetchTorrentioReleases({ tmdbId, tmdbType, season = 1, episode = 
   return rows;
 }
 
+// ---- Séries: temporadas e episódios (TMDB) ----
+async function fetchTmdbTv({ tmdbId, season } = {}) {
+  if (!/^\d+$/.test(String(tmdbId || ''))) throw new Error('Série inválida.');
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl } = await tmdbImageSettings(tmdbApiKey);
+  const show = await memo(`tv|${tmdbId}`, () => tmdbRequest(`/tv/${tmdbId}?language=pt-PT`, tmdbApiKey), 6 * 60 * 60 * 1000);
+  const seasons = (show.seasons || []).filter((entry) => entry.season_number >= 0 && entry.episode_count > 0).map((entry) => ({ number: entry.season_number, name: entry.season_number === 0 ? 'Especiais' : `Temporada ${entry.season_number}`, episodeCount: entry.episode_count, airDate: entry.air_date || '' }));
+  const first = seasons.find((entry) => entry.number > 0) || seasons[0];
+  const wanted = Number.isInteger(Number(season)) && seasons.some((entry) => entry.number === Number(season)) ? Number(season) : first?.number ?? 1;
+  const detail = await memo(`tvs|${tmdbId}|${wanted}`, () => tmdbRequest(`/tv/${tmdbId}/season/${wanted}?language=pt-PT`, tmdbApiKey), 6 * 60 * 60 * 1000);
+  const episodes = (detail.episodes || []).map((entry) => ({ number: entry.episode_number, name: entry.name || `Episódio ${entry.episode_number}`, overview: entry.overview || '', runtime: Number(entry.runtime) || 0, airDate: entry.air_date || '', still: tmdbImage(entry.still_path, 'w300', baseUrl) }));
+  return { title: show.name || '', seasons, season: wanted, episodes };
+}
+
 async function testProwlarr(value = {}) {
   const base = String(value.prowlarrUrl || '').trim().replace(/\/+$/, '');
   const key = String(value.prowlarrApiKey || '').trim();
@@ -2299,6 +2314,7 @@ function registerIpc() {
   ipcMain.handle('prowlarr:search', resultHandler(searchProwlarr));
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
   ipcMain.handle('torrentio:releases', resultHandler(fetchTorrentioReleases));
+  ipcMain.handle('tmdb:tv', resultHandler(fetchTmdbTv));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));

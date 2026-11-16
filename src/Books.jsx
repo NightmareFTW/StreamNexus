@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { pkey } from './profiles.js';
 import { Icon, PosterCard } from './ui.jsx';
 
 // ---- Estante pessoal de leitura (guardada localmente) ----
@@ -9,7 +10,7 @@ export const dayKey = (date = new Date()) => `${date.getFullYear()}-${String(dat
 
 export function loadReading() {
   try {
-    const value = JSON.parse(localStorage.getItem(READING_KEY));
+    const value = JSON.parse(localStorage.getItem(pkey(READING_KEY)));
     return { shelf: value?.shelf && typeof value.shelf === 'object' ? value.shelf : {}, goal: Number(value?.goal) || 0, days: Array.isArray(value?.days) ? value.days : [] };
   } catch { return { shelf: {}, goal: 0, days: [] }; }
 }

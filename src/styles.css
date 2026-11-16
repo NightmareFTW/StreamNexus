@@ -964,3 +964,73 @@ html, body { background: #070707; }
 /* Ecrã de preparação do leitor: sem barra de controlos e com ícone de erro */
 .player-modal.is-preparing .player-bottom { display: none; }
 .player-error-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: #ff7a82; background: rgba(229,9,20,.14); }
+
+
+/* Perfis */
+.profile-avatar { display: inline-grid; place-items: center; flex: none; border-radius: 8px; color: #fff; background: var(--avatar, #e50914); font-weight: 800; font-family: 'Manrope', sans-serif; }
+.profile-avatar-add { background: rgba(255,255,255,.08); color: #bbb; }
+.profile-gate { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 32px; background: radial-gradient(1200px 600px at 50% 0%, rgba(229,9,20,.12), transparent 60%), #0a0b10; }
+.profile-gate-inner { display: grid; justify-items: center; gap: 28px; width: min(900px, 100%); text-align: center; }
+.profile-gate-brand { font-size: 22px; }
+.profile-gate h1 { margin: 0; font: 800 clamp(28px, 4vw, 42px) 'Manrope', sans-serif; color: #fff; }
+.profile-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 28px; }
+.profile-tile { display: grid; justify-items: center; gap: 12px; width: 124px; padding: 0; border: 0; color: #aaa; background: transparent; cursor: pointer; }
+.profile-tile strong { max-width: 124px; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.profile-tile:hover { color: #fff; }
+.profile-tile:hover .profile-avatar, .profile-tile:focus-visible .profile-avatar { outline: 3px solid #fff; }
+.profile-tile-avatar { position: relative; display: grid; }
+.profile-tile-edit { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 8px; color: #fff; background: rgba(0,0,0,.55); font-style: normal; }
+.profile-gate-actions { display: flex; gap: 10px; }
+.profile-edit { display: grid; justify-items: center; gap: 12px; width: min(380px, 100%); }
+.profile-edit .text-input { width: 100%; text-align: center; }
+.profile-colors { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.profile-colors button { width: 30px; height: 30px; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.profile-colors button.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+.profile-edit-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 8px; }
+.profile-hint { color: #8d8d99; font-size: 11px; }
+.button-danger { border: 1px solid rgba(255,90,100,.6); color: #fff; background: rgba(229,9,20,.4); }
+.profile-menu-identity .profile-avatar { border-radius: 7px; }
+
+/* Séries: temporadas e episódios */
+.episodes-panel { margin-top: 18px; padding: 16px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(255,255,255,.025); }
+.episodes-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.episodes-head > div:first-child { display: grid; gap: 4px; }
+.episodes-head small { color: #8d8d99; font-size: 11px; }
+.episodes-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.episodes-controls select { padding: 8px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; color: #eee; background: #15161d; font: 600 12px 'Manrope', sans-serif; }
+.episode-list { display: grid; gap: 6px; max-height: 420px; margin: 0; padding: 0; overflow: auto; list-style: none; scrollbar-width: thin; }
+.episode-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; border-radius: 8px; }
+.episode-item.is-last { background: rgba(229,9,20,.08); }
+.episode-row { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 14px; align-items: center; width: 100%; padding: 8px; border: 0; border-radius: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.episode-row:hover { background: rgba(255,255,255,.06); }
+.episode-thumb { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: 6px; background: #1b1c25 center / cover no-repeat; overflow: hidden; }
+.episode-play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.45); opacity: 0; transition: opacity .15s; }
+.episode-row:hover .episode-play { opacity: 1; }
+.episode-progress { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; background: rgba(255,255,255,.25); }
+.episode-progress b { display: block; height: 100%; background: #e50914; }
+.episode-info { display: grid; gap: 4px; min-width: 0; }
+.episode-info strong { display: flex; gap: 8px; align-items: baseline; font: 700 13px 'Manrope', sans-serif; color: #fff; }
+.episode-info strong em { color: #8d8d99; font-style: normal; font-variant-numeric: tabular-nums; }
+.episode-info small { color: #8d8d99; font-size: 11px; }
+.episode-info p { display: -webkit-box; margin: 0; overflow: hidden; color: #a8a8b2; font-size: 11px; line-height: 1.45; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.episode-item.is-watched .episode-info strong { color: #bbb; }
+.episode-item.is-watched .episode-thumb { opacity: .55; }
+.episode-watch { display: grid; place-items: center; width: 34px; height: 34px; margin-right: 8px; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; color: #777; background: transparent; cursor: pointer; }
+.episode-watch:hover { color: #fff; border-color: rgba(255,255,255,.4); }
+.episode-watch.on { color: #fff; border-color: #2fb06a; background: #2fb06a; }
+
+/* Cartões: visto / progresso */
+.poster-watched { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 99px; color: #fff; background: rgba(47,176,106,.92); font: 700 10px 'Manrope', sans-serif; }
+.poster-episode-chip { background: rgba(0,0,0,.72); border: 1px solid rgba(255,255,255,.25); }
+.poster-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 3; height: 4px; background: rgba(255,255,255,.28); }
+.poster-progress b { display: block; height: 100%; background: #e50914; }
+.history-card { display: grid; gap: 6px; }
+.history-meta { display: flex; align-items: center; justify-content: space-between; color: #8d8d99; font-size: 11px; }
+.mode-tabs small { margin-left: 6px; opacity: .65; }
+.button.is-active { border-color: #2fb06a; background: rgba(47,176,106,.18); }
+
+/* Leitor: episódio seguinte */
+.next-episode-card { position: absolute; right: 24px; bottom: 120px; z-index: 7; display: grid; gap: 8px; width: min(340px, calc(100% - 48px)); padding: 14px 16px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(16,16,18,.95); box-shadow: 0 18px 50px rgba(0,0,0,.6); }
+.next-episode-card strong { color: #fff; font: 700 14px 'Manrope', sans-serif; }
+.next-episode-card div { display: flex; gap: 8px; }
+@media (max-width: 620px) { .episode-row { grid-template-columns: 96px minmax(0, 1fr); } }

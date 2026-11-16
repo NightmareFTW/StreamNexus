@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+
+// Dá aos cartões o estado de visto do perfil atual (função item -> info | null)
+export const WatchContext = createContext(null);
 
 export const POSTER_KIND = { 'Álbum': 'music', 'Livro': 'book', 'Canal': 'channel', 'Vídeo': 'clip' };
 
@@ -135,12 +138,17 @@ export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave 
   const sources = item.posters?.length ? item.posters : [item.poster];
   const [imageIndex, setImageIndex] = useState(0);
   const imageFailed = imageIndex >= sources.length || !sources[imageIndex];
+  const watchLookup = useContext(WatchContext);
+  const watchState = watchLookup && (item.type === 'Filme' || item.type === 'Série') ? watchLookup(item) : null;
   useEffect(() => { if (imageFailed && onMissingLogo) onMissingLogo(item); }, [imageFailed]);
   return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} ${item.offline ? 'is-offline' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
     {rank && <span className="poster-rank">{rank}</span>}
     <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
       {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img key={sources[imageIndex]} src={sources[imageIndex]} referrerPolicy="no-referrer" alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageIndex((current) => current + 1)}/>}
       <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
+      {watchState?.kind === 'movie' && watchState.watched && <span className="poster-watched" title="Visto"><Icon name="check" size={12}/>Visto</span>}
+      {watchState?.kind === 'series' && watchState.last && <span className="poster-watched poster-episode-chip" title="Último episódio">T{watchState.last.season}·E{watchState.last.episode}</span>}
+      {watchState?.inProgress && watchState.percent > 0 && <i className="poster-progress"><b style={{ width: `${Math.round(watchState.percent * 100)}%` }}></b></i>}
     </button>
     {!hideSave && <button className={`poster-save ${saved ? 'saved' : ''}`} aria-label={saved ? 'Remover da lista' : 'Adicionar à lista'} onClick={onSave}><Icon name={saved ? 'check' : 'plus'} size={15}/></button>}
     <button className="poster-title" onClick={onOpen}>{item.title}</button><div className="poster-sub"><span>{item.creator ? item.creator : <>{item.year} <i>·</i> {item.genre}</>}</span>{item.rating && <span className="poster-rating">★ {item.rating}</span>}</div>

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Icon, PosterCard, ScrollRow } from './ui.jsx';
+import { Icon, PosterCard, ScrollRow, WatchContext } from './ui.jsx';
+import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
+import { EpisodePicker, HistoryPage } from './Watch.jsx';
+import { loadProfiles, pkey, setActiveProfile } from './profiles.js';
+import { epLabel, loadWatch, markWatched, removeTitle, resumePointFor, saveWatch, watchInfo, withProgress } from './watch.js';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 import { FreeMusicPanel, SpotifyConnectBox } from './Music.jsx';
 import { MiniPlayer } from './MiniPlayer.jsx';
@@ -55,8 +59,28 @@ function getPlayableEntries(details) {
 }
 
 // Filmes: escolhe o maior vídeo. Séries ou desconhecido com vários vídeos: pede ao utilizador.
-function pickPlayableEntry(details, titleHint) {
+// Procura o episódio certo entre os ficheiros de um torrent (S01E02, 1x02, "season 1 episode 2")
+function episodePatterns(season, episode) {
+  const s = Number(season);
+  const e = Number(episode);
+  return [new RegExp(`s0*${s}[ ._-]*e0*${e}(?!\\d)`, 'i'), new RegExp(`(?<!\\d)${s}x0*${e}(?!\\d)`, 'i'), new RegExp(`season[ ._-]*0*${s}[^\\n]{0,24}?(?:episode|ep)[ ._-]*0*${e}(?!\\d)`, 'i')];
+}
+const entryMatchesEpisode = (name, season, episode) => episodePatterns(season, episode).some((pattern) => pattern.test(String(name || '')));
+// Um torrent já na biblioteca pode servir se for esse episódio ou um pack da temporada/série
+function torrentMayHaveEpisode(torrent, season, episode) {
+  const name = String(torrent?.filename || '');
+  if (entryMatchesEpisode(name, season, episode)) return true;
+  if (/s\d{1,2}[ ._-]*e\d{1,3}/i.test(name)) return false;
+  return new RegExp(`(?:s0*${Number(season)}(?!\\d)|season[ ._-]*0*${Number(season)}(?!\\d)|complete|temporada|\\bseries\\b)`, 'i').test(name);
+}
+const formatClock = (seconds) => { const total = Math.max(0, Math.round(Number(seconds) || 0)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const sec = total % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+
+function pickPlayableEntry(details, titleHint, episode = null) {
   const entries = getPlayableEntries(details);
+  if (episode) {
+    const found = entries.filter((entry) => entryMatchesEpisode(entry.name, episode.season, episode.episode)).sort((a, b) => b.bytes - a.bytes)[0];
+    if (found) return { entry: found };
+  }
   if (entries.length <= 1) return { entry: entries[0] || null };
   if (titleHint?.type === 'Filme') return { entry: [...entries].sort((a, b) => b.bytes - a.bytes)[0] };
   return { choose: [...entries].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
@@ -68,7 +92,7 @@ const RD_FLAGGED = /WEB[ ._-]?DL|WEB[ ._-]?x264|WEB[ ._-]?H264|WEB[ ._-]?Rip|BD[
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BAD_RELEASE = /\b(cam|hdcam|camrip|ts|hdts|telesync|tc|telecine|hdtc|scr|screener|dvdscr|workprint|r5|pre[ -]?dvd|hq[ -]?pre)\b/i;
 const normalizeName = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
-function scoreRelease(release, title) {
+function scoreRelease(release, title, episode = null) {
   const raw = `${release.title || ''} ${release.fileName || ''}`.trim();
   const name = ` ${normalizeName(raw)} `;
   let score = 0;
@@ -80,10 +104,21 @@ function scoreRelease(release, title) {
   if (/bluray|blu ray|remux/.test(name)) score += 12; else if (/web dl|webdl|webrip|brrip/.test(name)) score += 4;
   if (RD_FLAGGED.test(raw)) score -= 60;
   if (title.type === 'Série') {
-    // Séries: preferir packs de temporada/série completa; entre episódios soltos, o primeiro
-    if (/\bs\d{1,2}\b(?!e\d)|complete|temporada|season/.test(name) && !/\bs\d{1,2}e\d{1,3}\b/.test(name)) score += 15;
-    else if (/\bs0?1e0?1\b/.test(name)) score += 8;
-    else if (/\bs\d{1,2}e\d{1,3}\b/.test(name)) score -= 6;
+    if (episode) {
+      // Episódio pedido: o próprio episódio ganha; episódios soltos de outro número perdem; packs da temporada servem
+      const season = Number(episode.season);
+      const number = Number(episode.episode);
+      const anyEpisode = /\bs\d{1,2}\s?e\d{1,3}\b/.test(name);
+      if (new RegExp(`\\bs0*${season}\\s?e0*${number}\\b`).test(name)) score += 30;
+      else if (anyEpisode) score -= 60;
+      else if (new RegExp(`\\b(s0*${season}|season ${season})\\b`).test(name)) score += 12;
+      else if (/complete|temporada|\bseries\b/.test(name)) score += 6;
+    } else {
+      // Séries: preferir packs de temporada/série completa; entre episódios soltos, o primeiro
+      if (/\bs\d{1,2}\b(?!e\d)|complete|temporada|season/.test(name) && !/\bs\d{1,2}e\d{1,3}\b/.test(name)) score += 15;
+      else if (/\bs0?1e0?1\b/.test(name)) score += 8;
+      else if (/\bs\d{1,2}e\d{1,3}\b/.test(name)) score -= 6;
+    }
   }
   if (/x264|h 264|\bavc\b/.test(name)) score += 8; else if (/x265|h 265|hevc/.test(name)) score += 3;
   if (/10bit|\bhdr\b|dolby vision|\bdv\b/.test(name)) score -= 6;
@@ -285,7 +320,7 @@ function getError(error) {
   return error?.message || 'Ocorreu um erro inesperado.';
 }
 
-function App() {
+function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const [activePage, setActivePage] = useState('home');
   const [query, setQuery] = useState('');
   const [genre, setGenre] = useState('Todos');
@@ -343,7 +378,7 @@ function App() {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playerPlaybackError, setPlayerPlaybackError] = useState('');
   const [adultEnabled, setAdultEnabled] = useState(() => {
-    try { return localStorage.getItem('streamnexus.settings.adult') === 'true'; } catch { return false; }
+    try { return localStorage.getItem(pkey('streamnexus.settings.adult')) === 'true'; } catch { return false; }
   });
   const [searchCategory, setSearchCategory] = useState('movies');
   const [indexerQuery, setIndexerQuery] = useState('');
@@ -354,9 +389,15 @@ function App() {
   const [magnet, setMagnet] = useState('');
   const [magnetBusy, setMagnetBusy] = useState(false);
   const [saved, setSaved] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('streamnexus.watchlist') || '[]'); } catch { return []; }
+    try { return JSON.parse(localStorage.getItem(pkey('streamnexus.watchlist')) || '[]'); } catch { return []; }
   });
   const [playing, setPlaying] = useState(null);
+  const [watch, setWatch] = useState(loadWatch);
+  const updateWatch = (change) => setWatch((current) => { const next = change(current); saveWatch(next); return next; });
+  const watchLookup = (item) => watchInfo(watch, item);
+  const toggleEpisodeWatched = (title, season, episode, watched, name) => updateWatch((current) => markWatched(current, title, { season, episode, name }, watched));
+  const toggleMovieWatched = (title, watched) => updateWatch((current) => markWatched(current, title, null, watched));
+  const forgetTitle = (id) => updateWatch((current) => removeTitle(current, id));
   const [visibleCount, setVisibleCount] = useState(24);
 
   const notify = useCallback((message, kind = 'success') => {
@@ -673,11 +714,65 @@ function App() {
     await resumePlayback(position, true, { quality });
   };
 
-  const handleVideoEnded = () => {
-    if (!playing?.piped || playing.live || !playing.totalDuration || playing.resuming) return;
-    const position = (playing.offset || 0) + (playerVideoRef.current?.currentTime || 0);
-    if (position < playing.totalDuration - 45 && (playing.resumes || 0) < 6) resumePlayback(position);
+  // Episódio seguinte (mesma temporada ou a primeira da seguinte)
+  const nextEpisodeAfter = async (title, season, episode) => {
+    if (!window.streamnexus?.isDesktop || !title?.tmdbId) return null;
+    try {
+      const current = await window.streamnexus.fetchTvSeason({ tmdbId: title.tmdbId, season });
+      const next = current.episodes.find((entry) => entry.number === episode + 1);
+      if (next) return { season, episode: next.number, name: next.name };
+      const nextSeason = current.seasons.find((entry) => entry.number > season && entry.number > 0);
+      if (!nextSeason) return null;
+      const following = await window.streamnexus.fetchTvSeason({ tmdbId: title.tmdbId, season: nextSeason.number });
+      const first = following.episodes[0];
+      return first ? { season: nextSeason.number, episode: first.number, name: first.name } : null;
+    } catch { return null; }
   };
+
+  const finishPlayback = async () => {
+    const meta = playing?.metadata;
+    if (!meta?.id) return;
+    updateWatch((current) => withProgress(current, meta, playing.episode || null, 1, 1, true));
+    if (meta.type === 'Série' && playing.episode) {
+      const next = await nextEpisodeAfter(meta, playing.episode.season, playing.episode.episode);
+      if (next) setPlaying((current) => (current?.metadata?.id === meta.id ? { ...current, nextEpisode: next } : current));
+    }
+  };
+
+  const handleVideoEnded = () => {
+    const position = (playing?.offset || 0) + (playerVideoRef.current?.currentTime || 0);
+    if (playing?.piped && !playing.live && playing.totalDuration && !playing.resuming && position < playing.totalDuration - 45 && (playing.resumes || 0) < 6) { resumePlayback(position); return; }
+    const total = playing?.totalDuration || playerVideoRef.current?.duration || 0;
+    if (!playing?.live && total && position >= total * 0.9) finishPlayback();
+  };
+
+  // Guarda a posição do filme/episódio de 8 em 8 segundos (e ao sair), e marca como visto perto do fim
+  useEffect(() => {
+    if (!isPlayerOpen || !playing?.url || playing.live || !['Filme', 'Série'].includes(playing.metadata?.type) || !playing.metadata?.id) return undefined;
+    const save = () => {
+      const video = playerVideoRef.current;
+      if (!video) return;
+      const position = (playing.offset || 0) + (video.currentTime || 0);
+      const duration = playing.totalDuration || (Number.isFinite(video.duration) ? video.duration : 0);
+      if (!duration || position < 5) return;
+      updateWatch((current) => withProgress(current, playing.metadata, playing.episode || null, position, duration));
+    };
+    const timer = window.setInterval(save, 8000);
+    window.addEventListener('beforeunload', save);
+    return () => { save(); window.clearInterval(timer); window.removeEventListener('beforeunload', save); };
+  }, [isPlayerOpen, playing?.url, playing?.metadata?.id, playing?.episode?.season, playing?.episode?.episode, playing?.offset, playing?.totalDuration]);
+
+  // Retoma de onde ficou: salta para a posição guardada assim que o vídeo está pronto
+  useEffect(() => {
+    if (!isPlayerOpen || !playing?.url || !playing.resumeAt || playing.live || playing.resuming) return;
+    const at = playing.resumeAt;
+    setPlaying((current) => (current ? { ...current, resumeAt: 0 } : current));
+    if (playing.piped) { resumePlayback(at, true); return; }
+    const video = playerVideoRef.current;
+    if (!video) return;
+    const apply = () => { video.currentTime = at; };
+    if (video.readyState >= 1) apply(); else video.addEventListener('loadedmetadata', apply, { once: true });
+  }, [isPlayerOpen, playing?.url, playing?.resumeAt]);
 
   const pipedSeek = Boolean(playing?.piped && !playing.live && playing.totalDuration);
   const [seekDraft, setSeekDraft] = useState(null);
@@ -799,11 +894,11 @@ function App() {
         }
         if (details.links?.length) {
           const wantedFile = String(playing.candidates?.[playing.candidateIndex || 0]?.fileName || '').toLowerCase();
-          const exact = wantedFile ? getPlayableEntries(details).find((entry) => entry.name.split('/').pop().toLowerCase() === wantedFile) : null;
-          const picked = exact ? { entry: exact } : pickPlayableEntry(details, playing.metadata);
+          const exact = !playing.episode && wantedFile ? getPlayableEntries(details).find((entry) => entry.name.split('/').pop().toLowerCase() === wantedFile) : null;
+          const picked = exact ? { entry: exact } : pickPlayableEntry(details, playing.metadata, playing.episode);
           if (picked.choose) {
             setPlaying(null);
-            setModal({ type: 'files', torrent: { id: playing.torrentId, filename: details.filename }, titleHint: playing.metadata, entries: picked.choose });
+            setModal({ type: 'files', torrent: { id: playing.torrentId, filename: details.filename }, titleHint: playing.metadata, entries: picked.choose, ctx: { episode: playing.episode, resumeAt: playing.resumeAt } });
             return;
           }
           const chosenLink = details.links[picked.entry?.linkIndex ?? 0];
@@ -1072,7 +1167,7 @@ function App() {
     }
   };
 
-  const openTorrentStream = async (torrent, titleHint = null, chosenLinkIndex = null) => {
+  const openTorrentStream = async (torrent, titleHint = null, chosenLinkIndex = null, ctx = {}) => {
     try {
       let details = await callRd(`/torrents/info/${encodeURIComponent(torrent.id)}`);
       if (details.status === 'waiting_files_selection') {
@@ -1085,8 +1180,8 @@ function App() {
       if (details.links?.length) {
         let linkIndex = chosenLinkIndex;
         if (linkIndex == null) {
-          const picked = pickPlayableEntry(details, titleHint);
-          if (picked.choose) { setModal({ type: 'files', torrent, titleHint, entries: picked.choose }); return; }
+          const picked = pickPlayableEntry(details, titleHint, ctx.episode);
+          if (picked.choose) { setModal({ type: 'files', torrent, titleHint, entries: picked.choose, ctx }); return; }
           linkIndex = picked.entry?.linkIndex ?? 0;
         }
         const chosenLink = details.links[linkIndex] || details.links[0];
@@ -1103,7 +1198,7 @@ function App() {
       setSubtitleTrackUrl('');
       setActiveSubId('');
       setTrailerPlaying(false);
-      setPlaying({ title: title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
+      setPlaying({ title: ctx.episode ? `${title.title} · ${epLabel(ctx.episode.season, ctx.episode.episode)}` : title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName, episode: ctx.episode || null, resumeAt: ctx.resumeAt || 0 });
       setModal({ type: 'player' });
       findSubtitles(title, fileName);
       if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.', 'info');
@@ -1121,10 +1216,10 @@ function App() {
   };
 
   const [adultCategory, setAdultCategory] = useState('Todos');
-  const [adultOrientation, setAdultOrientation] = useState(() => { try { return localStorage.getItem('streamnexus.adult.orientation') || 'straight'; } catch { return 'straight'; } });
+  const [adultOrientation, setAdultOrientation] = useState(() => { try { return localStorage.getItem(pkey('streamnexus.adult.orientation')) || 'straight'; } catch { return 'straight'; } });
   const changeAdultOrientation = (value) => {
     setAdultOrientation(value);
-    try { localStorage.setItem('streamnexus.adult.orientation', value); } catch { /* preferência só nesta sessão */ }
+    try { localStorage.setItem(pkey('streamnexus.adult.orientation'), value); } catch { /* preferência só nesta sessão */ }
   };
   const [adultVideos, setAdultVideos] = useState({ status: 'idle', rows: [], message: '' });
   const adultRequestRef = useRef(0);
@@ -1149,7 +1244,7 @@ function App() {
     if (activePage === 'adult' && adultEnabled && adultMode === 'videos') loadAdultVideos('Todos', adultOrientation);
   }, [activePage, adultEnabled, adultMode, adultOrientation, loadAdultVideos]);
 
-  const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem('streamnexus.tv.country') || 'PT'; } catch { return 'PT'; } });
+  const [tvCountry, setTvCountry] = useState(() => { try { return localStorage.getItem(pkey('streamnexus.tv.country')) || 'PT'; } catch { return 'PT'; } });
   const [liveCountries, setLiveCountries] = useState([]);
   const [liveChannels, setLiveChannels] = useState({ status: 'idle', items: [], categories: [], message: '' });
   const liveRequestRef = useRef(0);
@@ -1196,7 +1291,7 @@ function App() {
 
   const changeTvCountry = (code) => {
     setTvCountry(code);
-    try { localStorage.setItem('streamnexus.tv.country', code); } catch { /* preferência só nesta sessão */ }
+    try { localStorage.setItem(pkey('streamnexus.tv.country'), code); } catch { /* preferência só nesta sessão */ }
   };
 
   const prepareLivePlayback = async (sourceUrl, preferHls = true) => {
@@ -1266,7 +1361,7 @@ function App() {
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
     setReading(next);
-    try { localStorage.setItem(READING_KEY, JSON.stringify(next)); } catch { /* a estante fica só nesta sessão */ }
+    try { localStorage.setItem(pkey(READING_KEY), JSON.stringify(next)); } catch { /* a estante fica só nesta sessão */ }
   };
   const updateBook = (book, patch) => {
     const entry = { addedAt: Date.now(), progress: 0, ...reading.shelf[book.id], ...patch, book };
@@ -1291,17 +1386,17 @@ function App() {
   };
   const setReadingGoal = (goal) => persistReading({ ...reading, goal });
 
-  const [savedItems, setSavedItems] = useState(() => { try { return JSON.parse(localStorage.getItem('streamnexus.watchlist.items')) || {}; } catch { return {}; } });
+  const [savedItems, setSavedItems] = useState(() => { try { return JSON.parse(localStorage.getItem(pkey('streamnexus.watchlist.items'))) || {}; } catch { return {}; } });
   const toggleSaved = (id, item) => {
     const adding = !saved.includes(id);
     const next = adding ? [...saved, id] : saved.filter((entry) => entry !== id);
     setSaved(next);
-    localStorage.setItem('streamnexus.watchlist', JSON.stringify(next));
+    localStorage.setItem(pkey('streamnexus.watchlist'), JSON.stringify(next));
     if (item) {
       setSavedItems((current) => {
         const copy = { ...current };
         if (adding) copy[id] = item; else delete copy[id];
-        try { localStorage.setItem('streamnexus.watchlist.items', JSON.stringify(copy)); } catch { /* cópia só nesta sessão */ }
+        try { localStorage.setItem(pkey('streamnexus.watchlist.items'), JSON.stringify(copy)); } catch { /* cópia só nesta sessão */ }
         return copy;
       });
     }
@@ -1332,7 +1427,7 @@ function App() {
 
   const toggleAdultSearch = (enabled) => {
     setAdultEnabled(enabled);
-    try { localStorage.setItem('streamnexus.settings.adult', String(enabled)); } catch { /* preference remains for this session */ }
+    try { localStorage.setItem(pkey('streamnexus.settings.adult'), String(enabled)); } catch { /* preference remains for this session */ }
     if (!enabled && searchCategory === 'adult') {
       setSearchCategory('movies');
       setReleaseSearch(null);
@@ -1361,7 +1456,7 @@ function App() {
     return () => { cancelled = true; };
   }, [modal?.type, modal?.id]);
 
-  const pageTitle = ({ home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
+  const pageTitle = ({ history: 'Vistos e a continuar', home: 'Descobrir', films: 'Filmes', series: 'Séries', tv: 'TV', music: 'Música', books: 'Livros', adult: 'Adultos', indexers: 'Pesquisar', watchlist: 'A minha lista', downloads: 'Real-Debrid' })[activePage] || 'Descobrir';
   const browseCategoryKey = PAGE_SEARCH_CATEGORY[activePage] || activePage;
   const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
   const browseGenres = [...new Set([...(STATIC_GENRES[activePage] || []), ...genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'pt-PT'));
@@ -1563,7 +1658,7 @@ function App() {
   const autoPlayRef = useRef(0);
   // "Ver agora": se já está na biblioteca, abre; senão escolhe sozinho o melhor lançamento, envia-o para o
   // Real-Debrid e abre o leitor, que começa assim que o ficheiro estiver pronto (logo, se estiver em cache).
-  const autoPlayBest = async (title) => {
+  const autoPlayBest = async (title, ctx = {}) => {
     const runId = ++autoPlayRef.current;
     const mine = (current) => current && current.runId === runId;
     setEmbeddedSubtitleTracks([]);
@@ -1573,19 +1668,20 @@ function App() {
     setSubtitleTrackUrl('');
     setActiveSubId('');
     setTrailerPlaying(false);
-    setPlaying({ title: title.title, url: '', pending: true, phase: 'searching', progress: 0, metadata: title, fileName: title.title, torrentId: '', runId });
+    setPlaying({ title: ctx.episode ? `${title.title} · ${epLabel(ctx.episode.season, ctx.episode.episode)}` : title.title, url: '', pending: true, phase: 'searching', progress: 0, metadata: title, fileName: title.title, torrentId: '', runId, episode: ctx.episode || null, resumeAt: ctx.resumeAt || 0 });
     setModal({ type: 'player' });
     let triedCount = 0;
     try {
       const category = SEARCH_CATEGORIES[titleCategory(title)] || SEARCH_CATEGORIES.movies;
       const prowlarrReady = Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey);
-      const reuse = releaseSearch?.titleId === title.id && releaseSearch.status === 'found' ? releaseSearch.items : null;
+      const epTag = ctx.episode ? ` S${String(ctx.episode.season).padStart(2, '0')}E${String(ctx.episode.episode).padStart(2, '0')}` : '';
+      const reuse = !ctx.episode && releaseSearch?.titleId === title.id && releaseSearch.status === 'found' ? releaseSearch.items : null;
       const [fromTorrentio, fromProwlarr] = await Promise.all([
-        title.tmdbId ? window.streamnexus.searchTorrentio({ tmdbId: title.tmdbId, tmdbType: title.tmdbType || (title.type === 'Série' ? 'tv' : 'movie'), season: 1, episode: 1 }).catch(() => []) : [],
-        reuse || (prowlarrReady ? window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] }).catch(() => []) : []),
+        title.tmdbId ? window.streamnexus.searchTorrentio({ tmdbId: title.tmdbId, tmdbType: title.tmdbType || (title.type === 'Série' ? 'tv' : 'movie'), season: ctx.episode?.season || 1, episode: ctx.episode?.episode || 1 }).catch(() => []) : [],
+        reuse || (prowlarrReady ? window.streamnexus.searchReleases({ query: `${title.searchQuery || title.original || title.title}${epTag}`, type: category.type, categories: [category.category] }).catch(() => []) : []),
       ]);
       const items = [...fromTorrentio, ...fromProwlarr];
-      const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title) })).sort((a, b) => b.score - a.score);
+      const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title, ctx.episode) })).sort((a, b) => b.score - a.score);
       const good = ranked.filter((entry) => entry.score > -150);
       const candidates = (good.length ? good : ranked).slice(0, 8).map((entry) => entry.release);
       triedCount = candidates.length;
@@ -1614,15 +1710,43 @@ function App() {
     }
   };
 
-  const startPlayback = (title) => {
+  // Rótulo do botão principal: continuar de onde ficou
+  const playLabelFor = (title) => {
+    const info = watchInfo(watch, title);
+    if (title.type === 'Série') {
+      const point = resumePointFor(watch[title.id]);
+      if (!point) return 'Ver agora';
+      return point.watched ? `Seguinte a ${epLabel(point.season, point.episode)}` : `Continuar ${epLabel(point.season, point.episode)}${point.position > 30 ? ` · ${formatClock(point.position)}` : ''}`;
+    }
+    if (info?.inProgress) return `Continuar · ${formatClock(watch[title.id].position)}`;
+    return info?.watched ? 'Ver outra vez' : 'Ver agora';
+  };
+
+  const startPlayback = async (title, ctx = {}) => {
     if (!session?.access_token) { setModal({ type: 'connect' }); return; }
-    if (rdSearch?.titleId === title.id && rdSearch.matches?.length) { openTorrentStream(rdSearch.matches[0], title); return; }
-    if (window.streamnexus?.isDesktop && isVideoTitle(title) && ((integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey) || (integrationSettings.tmdbApiKey && title.tmdbId))) { autoPlayBest(title); return; }
+    let context = ctx;
+    if (title.type === 'Série' && !ctx.episode) {
+      const point = resumePointFor(watch[title.id]);
+      if (point && !point.watched) context = { episode: { season: point.season, episode: point.episode }, resumeAt: point.position };
+      else if (point) {
+        const next = await nextEpisodeAfter(title, point.season, point.episode);
+        context = { episode: next || { season: point.season, episode: point.episode }, resumeAt: 0 };
+      } else context = { episode: { season: 1, episode: 1 }, resumeAt: 0 };
+    } else if (title.type === 'Filme' && ctx.resumeAt === undefined) {
+      const record = watch[title.id];
+      context = { resumeAt: record && !record.watched && record.position > 60 ? record.position : 0 };
+    }
+    if (title.type === 'Série' && context.episode) {
+      const match = rdSearch?.titleId === title.id ? rdSearch.matches?.find((torrent) => torrentMayHaveEpisode(torrent, context.episode.season, context.episode.episode)) : null;
+      if (match) { openTorrentStream(match, title, null, context); return; }
+    } else if (rdSearch?.titleId === title.id && rdSearch.matches?.length) { openTorrentStream(rdSearch.matches[0], title, null, context); return; }
+    if (window.streamnexus?.isDesktop && isVideoTitle(title) && ((integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey) || (integrationSettings.tmdbApiKey && title.tmdbId))) { autoPlayBest(title, context); return; }
     setMagnet('');
     setModal({ type: 'magnet', title });
   };
 
   return (
+    <WatchContext.Provider value={watchLookup}>
     <div className={`app-shell ${mini ? 'has-mini' : ''}`}>
       <aside className="sidebar">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); setActivePage('home'); }} aria-label="StreamNexus, início">
@@ -1641,12 +1765,15 @@ function App() {
         </div>
         <div className="profile-menu-wrap header-profile" ref={profileMenuRef}>
           <button className={`profile-trigger ${profileMenuOpen ? 'is-open' : ''}`} aria-haspopup="menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen((open) => !open)}>
-            <span className="top-avatar">{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</span>
-            <span className="profile-trigger-name">{rdUser?.username || 'Perfil'}</span><Icon name="chevron" size={14}/>
+            <ProfileAvatar profile={profile} size={28}/>
+            <span className="profile-trigger-name">{profile.name}</span><Icon name="chevron" size={14}/>
           </button>
           {profileMenuOpen && <div className="profile-menu" role="menu">
-            <div className="profile-menu-identity"><span className="top-avatar">{rdUser?.username?.slice(0, 1)?.toUpperCase() || 'S'}</span><span><strong>{rdUser?.username || 'StreamNexus'}</strong><small>{session?.access_token ? (rdUser?.type === 'premium' ? 'Real-Debrid Premium' : 'Real-Debrid ligado') : 'Conta local'}</small></span></div>
+            <div className="profile-menu-identity"><ProfileAvatar profile={profile} size={36}/><span><strong>{profile.name}</strong><small>{session?.access_token ? (rdUser?.type === 'premium' ? `Real-Debrid Premium${rdUser?.username ? ` · ${rdUser.username}` : ''}` : 'Real-Debrid ligado') : 'Conta local'}</small></span></div>
+            <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onSwitchProfile(); }}><Icon name="user" size={16}/>Mudar de perfil</button>
+            <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onManageProfiles(); }}><Icon name="settings" size={16}/>Gerir perfis</button>
             <div className="profile-menu-divider"></div>
+            <button role="menuitem" onClick={() => { setActivePage('history'); setQuery(''); setProfileMenuOpen(false); }}><Icon name="history" size={16}/>Vistos e a continuar</button>
             <button role="menuitem" onClick={() => { setActivePage('watchlist'); setProfileMenuOpen(false); }}><Icon name="bookmark" size={16}/>A minha lista{saved.length > 0 && <small>{saved.length}</small>}</button>
             <button role="menuitem" onClick={() => { setActivePage('downloads'); setProfileMenuOpen(false); loadRdAccount(); }}><Icon name="cloud" size={16}/>Real-Debrid{session?.access_token && <small>{readyTorrents.length} prontos</small>}</button>
             <div className="profile-menu-divider"></div>
@@ -1656,7 +1783,9 @@ function App() {
       </aside>
 
       <main className="main-content" id="top">
-        {activePage === 'indexers' ? (
+        {activePage === 'history' ? (
+          <HistoryPage watch={watch} profileName={profile.name} onOpen={(entry) => openDetails(entry)} onForget={forgetTitle}/>
+        ) : activePage === 'indexers' ? (
           <section className="indexer-page page-in">
             <div className="page-heading"><div><span className="eyebrow"><span className="pulse-dot"></span> PROWLARR · REAL-DEBRID</span><h1>Pesquisar lançamentos</h1><p>Pesquisa nos indexadores configurados no Prowlarr e envia a tua escolha para a nuvem Real-Debrid.</p></div><button className="button button-quiet" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}><Icon name="settings" size={15}/>Configurar Prowlarr</button></div>
             <form className="indexer-search-form" onSubmit={(event) => { event.preventDefault(); searchReleaseSources(indexerQuery, searchCategory); }}>
@@ -1746,7 +1875,7 @@ function App() {
             <h2>{selectedTitle.title}</h2>
             <div className="detail-meta">{selectedTitle.rating && <><span className="rating-star">★</span><b>{selectedTitle.rating}</b><i></i></>}<span>{selectedTitle.runtime}</span><i></i><span>{selectedTitle.genre}</span></div>
             <p>{selectedTitle.description}</p>
-            <div className="detail-actions">{selectedTitle.type === 'Álbum' && selectedTitle.embedUrl && <button className="button button-primary" onClick={() => setModal({ type: 'embed', item: selectedTitle })}><Icon name="play" size={16}/>Ouvir agora</button>}{isVideoTitle(selectedTitle) && <button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>Ver agora</button>}<button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button>{trailer.status === 'loading' && <button className="button button-glass" disabled><span className="spinner"></span>A procurar trailer…</button>}{trailer.status === 'ready' && <button className="button button-glass" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={16}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
+            <div className="detail-actions">{selectedTitle.type === 'Álbum' && selectedTitle.embedUrl && <button className="button button-primary" onClick={() => setModal({ type: 'embed', item: selectedTitle })}><Icon name="play" size={16}/>Ouvir agora</button>}{isVideoTitle(selectedTitle) && <button className="button button-primary" onClick={() => startPlayback(selectedTitle)}><Icon name="play" size={16}/>{playLabelFor(selectedTitle)}</button>}{selectedTitle.type === 'Filme' && <button className={`button button-glass ${watch[selectedTitle.id]?.watched ? 'is-active' : ''}`} aria-pressed={Boolean(watch[selectedTitle.id]?.watched)} onClick={() => toggleMovieWatched(selectedTitle, !watch[selectedTitle.id]?.watched)}><Icon name="check" size={16}/>{watch[selectedTitle.id]?.watched ? 'Visto' : 'Marcar como visto'}</button>}<button className="button button-glass" onClick={() => toggleSaved(selectedTitle.id)}><Icon name={saved.includes(selectedTitle.id) ? 'check' : 'plus'} size={16}/>{saved.includes(selectedTitle.id) ? 'Na tua lista' : 'A minha lista'}</button>{trailer.status === 'loading' && <button className="button button-glass" disabled><span className="spinner"></span>A procurar trailer…</button>}{trailer.status === 'ready' && <button className="button button-glass" onClick={() => setTrailerPlaying((current) => !current)}><Icon name={trailerPlaying ? 'close' : 'play'} size={16}/>{trailerPlaying ? 'Fechar trailer' : 'Ver trailer'}</button>}</div>
             {selectedTitle.type === 'Livro' && (() => { const entry = reading.shelf[selectedTitle.id]; return <div className="reading-controls">
               <span className="eyebrow">A MINHA ESTANTE</span>
               <div className="reading-status">{Object.entries(READING_STATUS).map(([key, label]) => <button key={key} className={`button button-glass ${entry?.status === key ? 'is-active' : ''}`} onClick={() => setBookStatus(selectedTitle, key)}>{label}</button>)}</div>
@@ -1756,6 +1885,7 @@ function App() {
             {trailer.status === 'ready' && trailerPlaying && <div className="trailer-frame"><iframe title={`Trailer: ${selectedTitle.title}`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailer.key)}?autoplay=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/></div>}
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
+            {selectedTitle.type === 'Série' && selectedTitle.tmdbId && <EpisodePicker title={selectedTitle} entry={watch[selectedTitle.id]} onPlay={(season, episode, options) => startPlayback(selectedTitle, { episode: { season, episode }, resumeAt: options?.resumeAt || 0 })} onToggleWatched={(season, episode, watched, name) => toggleEpisodeWatched(selectedTitle, season, episode, watched, name)}/>}
             {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             {selectedTitle.type === 'Álbum' && <SpotifyConnectBox album={selectedTitle} onNotify={notify} activeUri={mini?.mode === 'spotify' ? spotifyNow : ''} onListen={(options) => listenOnSpotify(selectedTitle, options)}/>}
             {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} activeUrl={mini?.mode === 'tracks' ? mini.tracks[mini.index]?.url : ''} onPlay={(queue, index) => playTracks(queue, index, selectedTitle)} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
@@ -1822,12 +1952,13 @@ function App() {
 
         {modal.type === 'downloads' && <div className="modal-card small-confirm"><div className="modal-emblem magnet-emblem"><Icon name="cloud" size={24}/></div><span className="eyebrow">REAL-DEBRID</span><h2>Magnet enviado</h2><p>O conteúdo foi enviado para a tua conta. A transferência pode demorar alguns instantes a ficar pronta.</p><div className="small-confirm-actions"><button className="button button-quiet" onClick={() => setModal(null)}>Fechar</button><button className="button button-primary" onClick={() => { setModal(null); setActivePage('downloads'); loadRdAccount(); }}>Ver biblioteca <Icon name="chevron" size={14}/></button></div></div>}
 
-        {modal.type === 'files' && <div className="modal-card files-modal"><button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button><span className="eyebrow">REAL-DEBRID · VÁRIOS FICHEIROS</span><h2>Escolhe o que reproduzir</h2><p className="connect-lead">Este torrent tem {modal.entries.length} vídeos. Seleciona o episódio ou ficheiro que queres ver.</p><div className="files-list">{modal.entries.map((entry) => <button key={entry.linkIndex} className="files-option" onClick={() => openTorrentStream(modal.torrent, modal.titleHint, entry.linkIndex)}><span><Icon name="play" size={14}/><strong title={entry.name}>{entry.name}</strong></span><small>{formatBytes(entry.bytes)}</small></button>)}</div></div>}
+        {modal.type === 'files' && <div className="modal-card files-modal"><button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button><span className="eyebrow">REAL-DEBRID · VÁRIOS FICHEIROS</span><h2>Escolhe o que reproduzir</h2><p className="connect-lead">Este torrent tem {modal.entries.length} vídeos. Seleciona o episódio ou ficheiro que queres ver.</p><div className="files-list">{modal.entries.map((entry) => <button key={entry.linkIndex} className="files-option" onClick={() => openTorrentStream(modal.torrent, modal.titleHint, entry.linkIndex, modal.ctx || {})}><span><Icon name="play" size={14}/><strong title={entry.name}>{entry.name}</strong></span><small>{formatBytes(entry.bytes)}</small></button>)}</div></div>}
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'} ${playing?.url ? '' : 'is-preparing'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
+            {playing?.nextEpisode && <div className="next-episode-card"><span className="eyebrow">A SEGUIR</span><strong>{epLabel(playing.nextEpisode.season, playing.nextEpisode.episode)}{playing.nextEpisode.name ? ` · ${playing.nextEpisode.name}` : ''}</strong><div><button className="button button-primary button-sm" onClick={() => startPlayback(playing.metadata, { episode: playing.nextEpisode, resumeAt: 0 })}><Icon name="play" size={14}/>Reproduzir</button><button className="button button-quiet button-sm" onClick={() => setPlaying((current) => (current ? { ...current, nextEpisode: null } : current))}>Agora não</button></div></div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
             {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? `A enviar para o Real-Debrid${playing.attempt > 1 ? ` (versão ${playing.attempt} de ${playing.attemptTotal})` : ''}…` : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
@@ -1863,6 +1994,7 @@ function App() {
         </div>}
       </div>}
     </div>
+    </WatchContext.Provider>
   );
 }
 
@@ -1928,4 +2060,16 @@ function TorrentRow({ torrent, onPlay, onSelect, onDelete }) {
   return <div className="torrent-row"><div className={`torrent-cover ${isReady ? 'is-ready' : ''}`}><Icon name={isReady || isDownloading ? 'play' : 'film'} size={18}/></div><div className="torrent-main"><strong title={title}>{title}</strong><span>{size}<i>·</i> Adicionado {formatDate(torrent.added)}</span></div><div className="torrent-progress"><div className="torrent-progress-label"><span className={isReady ? 'ready-status' : ''}><i></i>{status}</span><small>{progress}%</small></div><div className="progress-track"><span style={{ width: `${progress}%` }}></span></div></div><div className="torrent-actions">{isReady ? <button className="button button-primary button-sm" onClick={onPlay}><Icon name="play" size={14}/>Reproduzir</button> : needsSelection ? <button className="button button-quiet button-sm" onClick={onSelect}>Selecionar ficheiros</button> : isDownloading ? <button className="button button-quiet button-sm" onClick={onPlay}><Icon name="play" size={14}/>Abrir</button> : <button className="button button-quiet button-sm" onClick={onSelect}><Icon name="refresh" size={14}/>Ver estado</button>}<button className="torrent-delete" aria-label={`Remover ${title}`} onClick={onDelete}><Icon name="trash" size={15}/></button></div></div>;
 }
 
-export default App;
+// Raiz: escolhe o perfil (ecrã "Quem está a ver?") e remonta a app ao trocar, para carregar os dados desse perfil.
+export default function App() {
+  const [profiles, setProfiles] = useState(loadProfiles);
+  const [activeId, setActiveId] = useState(() => { const list = loadProfiles(); return list.length > 1 ? null : list[0].id; });
+  const [previousId, setPreviousId] = useState('');
+  const [managing, setManaging] = useState(false);
+  if (!activeId) {
+    return <ProfileGate key={managing ? 'manage' : 'choose'} profiles={profiles} onProfiles={setProfiles} startManaging={managing} canCancel={Boolean(previousId && profiles.some((profile) => profile.id === previousId))} onCancel={() => { setManaging(false); setActiveId(previousId); }} onChoose={(id) => { setManaging(false); setActiveProfile(id); setActiveId(id); }}/>;
+  }
+  setActiveProfile(activeId);
+  const profile = profiles.find((entry) => entry.id === activeId) || profiles[0];
+  return <AppShell key={profile.id} profile={profile} onSwitchProfile={() => { setPreviousId(profile.id); setManaging(false); setActiveId(null); }} onManageProfiles={() => { setPreviousId(profile.id); setManaging(true); setActiveId(null); }}/>;
+}
