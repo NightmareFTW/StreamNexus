@@ -275,6 +275,8 @@ function App() {
   const [subtitleStatus, setSubtitleStatus] = useState('idle');
   const [subtitleError, setSubtitleError] = useState('');
   const [subtitleTrackUrl, setSubtitleTrackUrl] = useState('');
+  const [downloadedSubs, setDownloadedSubs] = useState([]);
+  const [activeSubId, setActiveSubId] = useState('');
   const [subtitleLabel, setSubtitleLabel] = useState('');
   const [subtitleLanguage, setSubtitleLanguage] = useState('pt-PT');
   const [embeddedSubtitleTracks, setEmbeddedSubtitleTracks] = useState([]);
@@ -431,7 +433,12 @@ function App() {
 
   useEffect(() => {
     if (!subtitleTrackUrl) return undefined;
-    return () => URL.revokeObjectURL(subtitleTrackUrl);
+    const show = () => {
+      Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { if (String(track.label || '').startsWith('OpenSubtitles ·')) track.mode = 'showing'; });
+    };
+    show();
+    const timers = [80, 400, 1200].map((delay) => window.setTimeout(show, delay));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [subtitleTrackUrl]);
 
   useEffect(() => {
@@ -772,7 +779,7 @@ function App() {
         window.setTimeout(() => document.querySelector('#indexer-query')?.focus(), 0);
       }
       if (event.key === 'Escape') {
-        if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); }
+        if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); setActiveSubId(''); }
         setModal(null);
         setProfileMenuOpen(false);
       }
@@ -908,7 +915,6 @@ function App() {
   const findSubtitles = async (title, fileName = '') => {
     setSubtitleResults([]);
     setSubtitleError('');
-    setSubtitleTrackUrl('');
     setSubtitleStatus('loading');
     try {
       if (!window.streamnexus?.isDesktop) throw new Error('As legendas OpenSubtitles estão disponíveis na app desktop.');
@@ -925,20 +931,39 @@ function App() {
     }
   };
 
+  const activateSubtitle = (entry) => {
+    setSubtitleTrackUrl(entry.url);
+    setSubtitleLabel(`OpenSubtitles · ${entry.label}`);
+    setSubtitleLanguage(entry.language || 'pt-PT');
+    setActiveSubId(entry.fileId);
+    setActiveEmbeddedTrack(null);
+    setEmbeddedSubtitleTracks((tracks) => tracks.map((track) => { track.mode = 'disabled'; return track; }));
+    setSubtitleStatus('selected');
+  };
+
+  const disableSubtitles = () => {
+    Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { track.mode = 'disabled'; });
+    setSubtitleTrackUrl('');
+    setActiveSubId('');
+    setActiveEmbeddedTrack(null);
+    setSubtitleLabel('');
+    setSubtitleStatus(subtitleResults.length ? 'found' : 'idle');
+  };
+
   const chooseSubtitle = async (subtitle) => {
-    setSubtitleStatus('downloading');
+    const forFile = playing?.fileName || '';
     setSubtitleError('');
+    const cached = downloadedSubs.find((entry) => entry.fileId === subtitle.fileId && entry.forFile === forFile);
+    if (cached) { activateSubtitle(cached); return; }
+    setSubtitleStatus('downloading');
     try {
       const result = await window.streamnexus.downloadSubtitle({ fileId: subtitle.fileId, fileName: subtitle.fileName });
-      let vtt = String(result.text || '').replace(/^\uFEFF/, '').replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2').trim();
+      let vtt = String(result.text || '').replace(/^﻿/, '').replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2').trim();
       if (!vtt.startsWith('WEBVTT')) vtt = `WEBVTT\n\n${vtt}`;
-      const blob = new Blob([vtt], { type: 'text/vtt;charset=utf-8' });
-      setSubtitleTrackUrl(URL.createObjectURL(blob));
-      setSubtitleLabel(`OpenSubtitles · ${subtitle.label || subtitle.language || 'Legenda'}`);
-      setSubtitleLanguage(subtitle.language || 'pt-PT');
-      setActiveEmbeddedTrack(null);
-      setEmbeddedSubtitleTracks((tracks) => tracks.map((track) => { track.mode = 'disabled'; return track; }));
-      setSubtitleStatus('selected');
+      const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt;charset=utf-8' }));
+      const entry = { fileId: subtitle.fileId, label: subtitle.label || subtitle.language || 'Legenda', language: subtitle.language || 'pt-PT', fileName: subtitle.fileName || '', release: subtitle.release || '', url, forFile };
+      setDownloadedSubs((list) => [...list, entry]);
+      activateSubtitle(entry);
     } catch (error) {
       setSubtitleError(getError(error));
       setSubtitleStatus('error');
@@ -988,6 +1013,8 @@ function App() {
       setActiveEmbeddedTrack(null);
       setPlayerPlaybackError('');
       setSubtitleLabel('');
+      setSubtitleTrackUrl('');
+      setActiveSubId('');
       setTrailerPlaying(false);
       setPlaying({ title: title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName });
       setModal({ type: 'player' });
@@ -1128,6 +1155,8 @@ function App() {
       setActiveEmbeddedTrack(null);
       setPlayerPlaybackError('');
       setSubtitleLabel('');
+      setSubtitleTrackUrl('');
+      setActiveSubId('');
       setTrailerPlaying(false);
       setPlaying({ title: channel.title, ...playbackStream, pending: false, progress: 100, metadata: channel, fileName: '', live: { channel, index: streamIndex } });
       setModal({ type: 'player' });
@@ -1562,10 +1591,10 @@ function App() {
 
       <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => setMini(null)} onError={(message) => notify(message, 'error')}/>}
+      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')}/>}
       {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
-      {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
+      {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); setActiveSubId(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
         {modal.type === 'details' && selectedTitle && <div className="detail-modal modal-card">
           <div className="detail-backdrop" style={{ backgroundImage: `linear-gradient(0deg,#101117 0%,rgba(16,17,23,.93) 13%,rgba(16,17,23,0) 100%),linear-gradient(90deg,rgba(16,17,23,.45),transparent),url(${selectedTitle.backdrop})` }}></div>
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
@@ -1654,7 +1683,7 @@ function App() {
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
             {!playing?.url && <div className="player-empty"><span className="spinner"></span><strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `A aguardar o Real-Debrid · ${playing.progress || 0}%` : 'A preparar o ficheiro de vídeo')}</span>{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
@@ -1667,16 +1696,17 @@ function App() {
 
             {subtitleMenuOpen && <section className="subtitle-panel">
               <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
-              {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={() => { Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { track.mode = 'disabled'; }); setActiveEmbeddedTrack(null); setSubtitleLabel(''); setSubtitleStatus('found'); }}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
+              {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={disableSubtitles}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
               {embeddedSubtitleTracks.length === 0 && /\b(subs?|subtitles?|legendas?)\b/i.test(playing?.fileName || '') && <p className="subtitle-message">O leitor web não expôs as legendas embutidas neste ficheiro. Podes selecioná-las ao abrir com VLC.</p>}
               {subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}
               {subtitleStatus === 'downloading' && <p className="subtitle-message"><span className="spinner"></span>A descarregar a legenda…</p>}
               {subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}
               {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
-              {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda carregada. Ativa-a pelo botão de legendas.</p>}
+              {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda transferida e ativa no vídeo.</p>}
               {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
               {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
-              {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></span></button>)}</div>}
+              {downloadedSubs.some((entry) => entry.forFile === (playing?.fileName || '')) && <div className="embedded-subtitles"><span>Legendas transferidas</span><div><button className={!subtitleTrackUrl && !activeEmbeddedTrack ? 'active' : ''} onClick={disableSubtitles}>Desligadas</button>{downloadedSubs.filter((entry) => entry.forFile === (playing?.fileName || '')).map((entry) => <button key={entry.fileId} className={activeSubId === entry.fileId ? 'active' : ''} onClick={() => activateSubtitle(entry)}>{entry.label} <small>{entry.language === 'pt-PT' ? 'PT-PT' : 'PT-BR'}{entry.release ? ` · ${entry.release.slice(0, 26)}` : ''}</small></button>)}</div></div>}
+              {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''} ${activeSubId === subtitle.fileId ? 'is-active' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{activeSubId === subtitle.fileId ? <><Icon name="check" size={13}/> Ativa</> : downloadedSubs.some((entry) => entry.fileId === subtitle.fileId && entry.forFile === (playing?.fileName || '')) ? 'Transferida' : <>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></>}</span></button>)}</div>}
             </section>}
 
             <div className="player-bottom">

@@ -45,14 +45,14 @@ export function SpotifyConnectBox({ album, onListen, onNotify }) {
   };
   return <section className="easy-sources spotify-connect">
     <span className="eyebrow">SPOTIFY PREMIUM · COMANDO REMOTO</span>
-    {!status.configured && <p className="rd-empty-text">Para ouvir álbuns completos com a tua conta, indica o Client ID do Spotify nas Integrações e regista o endereço de retorno <code>{status.redirectUri}</code> na tua app Spotify.</p>}
+    {!status.configured && <p className="rd-empty-text">Para ouvir álbuns completos com a tua conta Premium, indica o Client ID do Spotify nas Integrações e regista o endereço de retorno <code>{status.redirectUri}</code> na tua app Spotify.</p>}
     {status.configured && !status.connected && <>
-      <p className="rd-empty-text">O Spotify só permite faixas completas em apps com DRM, que esta não tem. Liga a tua conta Premium e o StreamNexus passa a comandar o Spotify aberto no teu PC ou telemóvel, a partir do mini leitor. Regista <code>{status.redirectUri}</code> como Redirect URI na tua app Spotify (developer.spotify.com).</p>
+      <p className="rd-empty-text">{status.inApp ? 'Liga a tua conta Premium e o Spotify toca dentro do StreamNexus, sem abrir mais nada.' : 'Esta versão do Electron não tem DRM, por isso o StreamNexus só consegue comandar o Spotify aberto no teu PC ou telemóvel.'} Regista <code>{status.redirectUri}</code> como Redirect URI na tua app Spotify (developer.spotify.com).</p>
       <div className="detail-actions"><button className="button button-primary" disabled={busy} onClick={connect}>{busy ? <span className="spinner"></span> : <Icon name="link" size={16}/>}Ligar conta Spotify</button></div>
     </>}
     {status.configured && status.connected && <>
-      <p className="rd-empty-text">Ligado{status.name ? ` como ${status.name}` : ''}. O som sai do Spotify aberto num dos teus dispositivos; aqui controlas tudo pelo mini leitor.</p>
-      <div className="detail-actions"><button className="button button-primary" disabled={busy} onClick={listen}>{busy ? <span className="spinner"></span> : <Icon name="play" size={16}/>}Ouvir álbum completo no Spotify</button><button className="button button-quiet" onClick={disconnect}>Desligar</button></div>
+      <p className="rd-empty-text">Ligado{status.name ? ` como ${status.name}` : ''}. {status.needsReconnect ? 'Para tocar dentro da app é preciso voltar a ligar a conta (novas permissões).' : status.inApp ? 'O som sai diretamente do StreamNexus; controlas tudo pelo mini leitor.' : 'O som sai do Spotify aberto num dos teus dispositivos; aqui controlas tudo pelo mini leitor.'}</p>
+      <div className="detail-actions">{status.needsReconnect ? <button className="button button-primary" disabled={busy} onClick={connect}>{busy ? <span className="spinner"></span> : <Icon name="link" size={16}/>}Voltar a ligar o Spotify</button> : <button className="button button-primary" disabled={busy} onClick={listen}>{busy ? <span className="spinner"></span> : <Icon name="play" size={16}/>}{status.inApp ? 'Ouvir álbum completo aqui' : 'Ouvir álbum completo no Spotify'}</button>}<button className="button button-quiet" onClick={disconnect}>Desligar</button></div>
     </>}
   </section>;
 }

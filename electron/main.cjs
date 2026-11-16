@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, session, shell, components } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -370,7 +370,7 @@ async function testSpotify(value = {}) {
 const SPOTIFY_REDIRECT_PORT = 8898;
 const SPOTIFY_REDIRECT_URI = `http://127.0.0.1:${SPOTIFY_REDIRECT_PORT}/callback`;
 const SPOTIFY_USER_FILE = 'spotify-user.bin';
-const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing streaming user-read-email user-read-private';
 let spotifyUser = null;
 let spotifyLoginServer = null;
 
@@ -411,10 +411,89 @@ async function spotifyUserToken() {
   return data.access_token;
 }
 
+// ---- Spotify dentro da app: janela oculta com o SDK oficial (Web Playback) ----
+// Precisa do Electron com Widevine (castlabs, ver scripts/ensure-widevine-electron.mjs).
+// No Electron normal `components` não existe e a app volta ao comando remoto de outro dispositivo.
+const WIDEVINE_AVAILABLE = Boolean(components);
+let spotifyPlayerWindow = null;
+let spotifyPlayerServer = null;
+let spotifyPlayerState = { ready: false, deviceId: '', error: '' };
+let spotifyPlayerWaiters = [];
+
+const SPOTIFY_PLAYER_HTML = `<!doctype html><meta charset="utf-8"><title>StreamNexus · Spotify</title>
+<script>
+window.onSpotifyWebPlaybackSDKReady = () => {
+  const bridge = window.spotifyBridge;
+  const player = new Spotify.Player({ name: 'StreamNexus', getOAuthToken: (cb) => bridge.getToken().then(cb).catch(() => cb('')), volume: 0.8 });
+  player.addListener('ready', ({ device_id }) => bridge.report({ type: 'ready', deviceId: device_id }));
+  player.addListener('not_ready', () => bridge.report({ type: 'not_ready' }));
+  ['initialization_error', 'authentication_error', 'account_error', 'playback_error'].forEach((kind) => player.addListener(kind, ({ message }) => bridge.report({ type: 'error', kind, message })));
+  player.connect().then((ok) => { if (!ok) bridge.report({ type: 'error', kind: 'connect', message: 'O Spotify recusou a ligação do leitor. Volta a ligar a conta Spotify.' }); });
+  bridge.onCommand(({ action, value }) => { if (action === 'volume') player.setVolume(value); });
+};
+</script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>`;
+
+function notifySpotifyPlayerWaiters() {
+  const waiters = spotifyPlayerWaiters;
+  spotifyPlayerWaiters = [];
+  waiters.forEach((resolve) => resolve());
+}
+
+function handleSpotifyPlayerEvent(event) {
+  if (event?.type === 'ready') spotifyPlayerState = { ready: true, deviceId: String(event.deviceId || ''), error: '' };
+  else if (event?.type === 'not_ready') spotifyPlayerState = { ...spotifyPlayerState, ready: false };
+  else if (event?.type === 'error') {
+    const reason = {
+      initialization_error: 'Este Electron não tem Widevine (DRM): não é possível tocar Spotify dentro da app.',
+      authentication_error: 'O Spotify recusou a sessão. Volta a ligar a conta Spotify.',
+      account_error: 'A conta Spotify tem de ser Premium para tocar dentro da app.',
+    }[event.kind];
+    if (event.kind !== 'playback_error') spotifyPlayerState = { ready: false, deviceId: '', error: reason || event.message || 'Erro no leitor Spotify.' };
+  }
+  notifySpotifyPlayerWaiters();
+}
+
+async function ensureSpotifyPlayer() {
+  if (!WIDEVINE_AVAILABLE) throw new Error('NO_WIDEVINE');
+  const user = await loadSpotifyUser();
+  if (!user?.refreshToken) throw new Error('Liga primeiro a tua conta Spotify.');
+  if (!String(user.scope || '').split(' ').includes('streaming')) throw new Error('Volta a ligar a conta Spotify para ativar a reprodução dentro da app.');
+  if (spotifyPlayerState.ready && spotifyPlayerState.deviceId && spotifyPlayerWindow && !spotifyPlayerWindow.isDestroyed()) return spotifyPlayerState.deviceId;
+  await Promise.race([components.whenReady(), new Promise((resolve) => setTimeout(resolve, 60000))]);
+  if (!spotifyPlayerWindow || spotifyPlayerWindow.isDestroyed()) {
+    spotifyPlayerState = { ready: false, deviceId: '', error: '' };
+    spotifyPlayerServer?.close();
+    spotifyPlayerServer = http.createServer((request, response) => { response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); response.end(SPOTIFY_PLAYER_HTML); });
+    await new Promise((resolve, reject) => { spotifyPlayerServer.once('error', reject); spotifyPlayerServer.listen(0, '127.0.0.1', resolve); });
+    spotifyPlayerWindow = new BrowserWindow({
+      show: false, width: 400, height: 300, title: 'StreamNexus · Spotify',
+      webPreferences: { preload: path.join(__dirname, 'spotify-player-preload.cjs'), partition: 'persist:streamnexus-spotify', contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required' },
+    });
+    spotifyPlayerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    spotifyPlayerWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+    spotifyPlayerWindow.on('closed', () => { spotifyPlayerWindow = null; spotifyPlayerState = { ready: false, deviceId: '', error: '' }; spotifyPlayerServer?.close(); spotifyPlayerServer = null; });
+    spotifyPlayerWindow.loadURL(`http://127.0.0.1:${spotifyPlayerServer.address().port}/`);
+  }
+  const deadline = Date.now() + 25000;
+  while (!(spotifyPlayerState.ready && spotifyPlayerState.deviceId) && !spotifyPlayerState.error && Date.now() < deadline) {
+    await Promise.race([new Promise((resolve) => spotifyPlayerWaiters.push(resolve)), new Promise((resolve) => setTimeout(resolve, 1000))]);
+  }
+  if (spotifyPlayerState.error) { const message = spotifyPlayerState.error; spotifyPlayerWindow?.destroy(); throw new Error(message); }
+  if (!spotifyPlayerState.deviceId) { spotifyPlayerWindow?.destroy(); throw new Error('O leitor Spotify não arrancou a tempo. Tenta de novo.'); }
+  return spotifyPlayerState.deviceId;
+}
+
+function closeSpotifyPlayer() {
+  if (spotifyPlayerWindow && !spotifyPlayerWindow.isDestroyed()) spotifyPlayerWindow.destroy();
+  spotifyPlayerServer?.close();
+}
+
 async function spotifyConnectStatus() {
   const { spotifyClientId } = await readIntegrations();
   const user = await loadSpotifyUser();
-  return { configured: Boolean(spotifyClientId), connected: Boolean(user?.refreshToken), redirectUri: SPOTIFY_REDIRECT_URI, name: user?.name || '' };
+  const streaming = String(user?.scope || '').split(' ').includes('streaming');
+  return { configured: Boolean(spotifyClientId), connected: Boolean(user?.refreshToken), redirectUri: SPOTIFY_REDIRECT_URI, name: user?.name || '', inApp: WIDEVINE_AVAILABLE, needsReconnect: Boolean(user?.refreshToken && WIDEVINE_AVAILABLE && !streaming) };
 }
 
 async function spotifyConnectLogin() {
@@ -446,7 +525,7 @@ async function spotifyConnectLogin() {
     });
   });
   const data = await spotifyTokenRequest({ grant_type: 'authorization_code', code, redirect_uri: SPOTIFY_REDIRECT_URI, client_id: spotifyClientId, code_verifier: verifier });
-  await saveSpotifyUser({ accessToken: data.access_token, refreshToken: data.refresh_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 });
+  await saveSpotifyUser({ accessToken: data.access_token, refreshToken: data.refresh_token, scope: data.scope || SPOTIFY_SCOPES, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 });
   let name = '';
   try { name = (await spotifyUserApi('GET', '/me'))?.display_name || ''; } catch { /* o nome é opcional */ }
   await saveSpotifyUser({ ...spotifyUser, name });
@@ -481,6 +560,14 @@ async function spotifyConnectState() {
 async function spotifyConnectCommand(value = {}) {
   const action = String(value.action || '');
   const withDevice = async (run) => {
+    if (WIDEVINE_AVAILABLE) {
+      const deviceId = await ensureSpotifyPlayer();
+      let lastError;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try { return await run({ device_id: deviceId }); } catch (error) { lastError = error; if (error.message !== 'NO_DEVICE') throw error; await new Promise((resolve) => setTimeout(resolve, 900)); }
+      }
+      throw new Error(lastError?.message === 'NO_DEVICE' ? 'O leitor Spotify ainda não ficou disponível. Tenta de novo.' : lastError?.message);
+    }
     try { return await run({}); } catch (error) {
       if (error.message !== 'NO_DEVICE') throw error;
       const devices = (await spotifyUserApi('GET', '/me/player/devices'))?.devices || [];
@@ -2114,6 +2201,8 @@ function registerIpc() {
   ipcMain.handle('books:sources', resultHandler(fetchBookSources));
   ipcMain.handle('app:open-link', resultHandler(openAllowedLink));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));
+  ipcMain.handle('spotify-player:token', (event) => (spotifyPlayerWindow && event.sender === spotifyPlayerWindow.webContents ? spotifyUserToken() : Promise.reject(new Error('Pedido recusado.'))));
+  ipcMain.on('spotify-player:event', (event, payload) => { if (spotifyPlayerWindow && event.sender === spotifyPlayerWindow.webContents) handleSpotifyPlayerEvent(payload); });
   ipcMain.handle('spotify:connect-status', resultHandler(spotifyConnectStatus));
   ipcMain.handle('spotify:connect-login', resultHandler(spotifyConnectLogin));
   ipcMain.handle('spotify:connect-logout', resultHandler(spotifyConnectLogout));
@@ -2161,7 +2250,7 @@ function createMainWindow() {
   });
   if (app.isPackaged) mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   else mainWindow.loadURL(DEV_URL);
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => { mainWindow = null; closeSpotifyPlayer(); });
 }
 
 app.setAppUserModelId('com.streamnexus.desktop');
@@ -2177,4 +2266,4 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => { stopAllAudioStreams().catch(() => {}); });
+app.on('before-quit', () => { stopAllAudioStreams().catch(() => {}); closeSpotifyPlayer(); });

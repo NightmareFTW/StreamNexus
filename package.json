@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "desktop": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
-    "package:win": "npm run build && electron-builder --win nsis"
+    "desktop": "node scripts/ensure-widevine-electron.mjs && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "setup:widevine": "node scripts/ensure-widevine-electron.mjs",
+    "package:win": "node scripts/ensure-widevine-electron.mjs && npm run build && electron-builder --win nsis"
   },
   "main": "electron/main.cjs",
   "dependencies": {
@@ -27,6 +28,8 @@
   },
   "build": {
     "appId": "com.streamnexus.desktop",
+    "electronDist": "node_modules/electron/dist",
+    "electronVersion": "45.2.1",
     "productName": "StreamNexus",
     "directories": {
       "output": "release"

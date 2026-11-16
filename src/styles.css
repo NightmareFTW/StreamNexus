@@ -930,3 +930,8 @@ html, body { background: #070707; }
 .audio-menu button { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
 .audio-menu button b { font-weight: 700; }
 .audio-menu button em { color: #8d8d95; font-size: 10px; font-style: normal; }
+
+
+/* Legendas: opção ativa na lista */
+.subtitle-option.is-active { border-color: rgba(111,220,154,.55); background: rgba(111,220,154,.09); }
+.subtitle-option.is-active > span:last-child { color: #9de1b8; }

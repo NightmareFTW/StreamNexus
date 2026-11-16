@@ -33,6 +33,8 @@ Install the project dependencies once in the repository:
 npm install
 ```
 
+The desktop app runs on the official [castlabs Electron](https://github.com/castlabs/electron-releases) build with Widevine (needed for Spotify playback inside the app). `npm run desktop` installs it on first run (about 150 MB, checksum verified); you can also run `npm run setup:widevine` once. Without it, the app still works and Spotify falls back to remote control of another Spotify device.
+
 Start the desktop app in development mode:
 
 ```bash
