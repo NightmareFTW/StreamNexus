@@ -419,6 +419,8 @@ let spotifyPlayerWindow = null;
 let spotifyPlayerServer = null;
 let spotifyPlayerState = { ready: false, deviceId: '', error: '' };
 let spotifyPlayerLastError = { message: '', at: 0 };
+let spotifyLicenseFailures = [];
+const SPOTIFY_LICENSE_HELP = 'O Spotify recusou a licença de DRM (erro 500): o Electron da app precisa da assinatura VMP gratuita da castlabs. Corre «npm run sign:widevine» na pasta do projeto e segue os passos (ver README).';
 const spotifyPlayerLogPath = () => path.join(app.getPath('userData'), 'spotify-player.log');
 function logSpotifyPlayer(line) {
   fs.appendFile(spotifyPlayerLogPath(), `${new Date().toISOString()} ${line}\n`).catch(() => {});
@@ -494,7 +496,18 @@ async function ensureSpotifyPlayer() {
       playerSession.__streamnexusNetLog = true;
       const shortUrl = (value) => { try { const url = new URL(value); return `${url.host}${url.pathname}`.slice(0, 160); } catch { return String(value).slice(0, 160); } };
       playerSession.webRequest.onErrorOccurred((details) => { if (details.error !== 'net::ERR_ABORTED') logSpotifyPlayer(`net-error ${details.error} ${shortUrl(details.url)}`); });
-      playerSession.webRequest.onCompleted((details) => { if (details.statusCode >= 400 || /licen[sc]e|widevine|drm/i.test(details.url)) logSpotifyPlayer(`http ${details.statusCode} ${details.method} ${shortUrl(details.url)}`); });
+      playerSession.webRequest.onCompleted((details) => {
+        if (details.statusCode >= 400 || /licen[sc]e|widevine|drm/i.test(details.url)) logSpotifyPlayer(`http ${details.statusCode} ${details.method} ${shortUrl(details.url)}`);
+        // Licença Widevine recusada várias vezes seguidas: sem assinatura VMP nada toca; pára o ciclo de saltos e explica
+        if (/widevine-license\/v1\/audio\/license/.test(details.url) && details.statusCode >= 500) {
+          const now = Date.now();
+          spotifyLicenseFailures = spotifyLicenseFailures.filter((time) => now - time < 15000).concat(now);
+          if (spotifyLicenseFailures.length >= 3) {
+            spotifyPlayerLastError = { message: SPOTIFY_LICENSE_HELP, at: now };
+            spotifyUserApi('PUT', '/me/player/pause').catch(() => {});
+          }
+        }
+      });
     }
     spotifyPlayerWindow.on('closed', () => { spotifyPlayerWindow = null; spotifyPlayerState = { ready: false, deviceId: '', error: '' }; spotifyPlayerServer?.close(); spotifyPlayerServer = null; });
     spotifyPlayerWindow.loadURL(`http://127.0.0.1:${spotifyPlayerServer.address().port}/`);

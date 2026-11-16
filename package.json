@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "desktop": "node scripts/ensure-widevine-electron.mjs && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "desktop": "node scripts/ensure-widevine-electron.mjs && node scripts/sign-widevine-electron.mjs --quiet && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "setup:widevine": "node scripts/ensure-widevine-electron.mjs",
+    "sign:widevine": "node scripts/sign-widevine-electron.mjs",
     "package:win": "node scripts/ensure-widevine-electron.mjs && npm run build && electron-builder --win nsis"
   },
   "main": "electron/main.cjs",
