@@ -891,3 +891,35 @@ html, body { background: #070707; }
 /* Pesquisa por separador */
 .search-page { padding-top: 28px; }
 .search-page .category-feed { margin-top: 0; }
+
+
+/* Mini leitor global (fica ativo enquanto se navega) */
+.mini-player { position: fixed; z-index: 45; right: 23px; bottom: 22px; display: grid; gap: 10px; width: 320px; padding: 12px 14px 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; color: #e9e8ef; background: rgba(20,21,28,.97); box-shadow: 0 18px 50px rgba(0,0,0,.55); backdrop-filter: blur(14px); animation: toastIn .2s ease both; }
+.mini-player.is-suspended { display: none; }
+.mini-player.is-min { grid-template-columns: 38px minmax(0,1fr) auto auto auto; align-items: center; gap: 8px; width: 340px; padding: 8px 10px; }
+.mini-head { display: flex; align-items: center; justify-content: space-between; }
+.mini-badge { color: #9a9aa6; font: 700 9px 'Manrope', sans-serif; letter-spacing: 1.6px; }
+.mini-head-actions { display: inline-flex; gap: 2px; }
+.mini-body { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mini-cover { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 6px; color: #8d8d99; background: #23242e center / cover no-repeat; }
+.mini-cover.big { width: 58px; height: 58px; border-radius: 8px; }
+.mini-info { display: grid; gap: 2px; min-width: 0; }
+.mini-info strong { overflow: hidden; color: #fff; font: 700 13px 'Manrope', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.mini-info small { overflow: hidden; color: #9a9aa6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.mini-seek { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; color: #9a9aa6; font-size: 10px; font-variant-numeric: tabular-nums; }
+.mini-seek input, .mini-volume input { accent-color: #e50914; min-width: 0; }
+.mini-controls { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.mini-volume { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: #9a9aa6; }
+.mini-volume input { width: 70px; }
+.mini-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; color: #d5d5db; background: transparent; cursor: pointer; }
+.mini-btn:hover:not(:disabled) { color: #fff; background: rgba(255,255,255,.1); }
+.mini-btn:disabled { opacity: .35; cursor: default; }
+.mini-btn-main { width: 38px; height: 38px; color: #fff; background: #e50914; }
+.mini-btn-main:hover:not(:disabled) { background: #f4202b; }
+.is-min .mini-btn-main { width: 32px; height: 32px; }
+.mini-chev { display: inline-grid; }
+.mini-chev.up { transform: rotate(-90deg); }
+.mini-chev.down { transform: rotate(90deg); }
+.app-shell.has-mini .toast { bottom: 22px; right: 360px; }
+.spotify-connect code { padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.08); font-size: 11px; user-select: all; }
+@media (max-width: 560px) { .mini-player, .mini-player.is-min { right: 10px; bottom: 10px; width: calc(100vw - 20px); } .app-shell.has-mini .toast { right: 12px; bottom: 96px; } }

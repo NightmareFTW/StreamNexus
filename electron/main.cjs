@@ -336,7 +336,7 @@ function normalizeSpotifyAlbum(album, shelf, index) {
     id: `album-sp-${album.id}`, type: 'Álbum', title: album.name, original: album.name, creator: artists, year, rating: '',
     genre, genres: [genre], runtime: tracks ? `${tracks} faixas` : 'Álbum', poster: art, backdrop: art,
     description: [artists, tracks ? `${tracks} faixas` : '', year].filter(Boolean).join(' · '),
-    source: 'Spotify', embedUrl: `https://open.spotify.com/embed/album/${album.id}?theme=0`, embedHeight: 380, linkUrl: album.external_urls?.spotify || `https://open.spotify.com/album/${album.id}`,
+    source: 'Spotify', spotifyUri: `spotify:album:${album.id}`, embedUrl: `https://open.spotify.com/embed/album/${album.id}?theme=0`, embedHeight: 380, linkUrl: album.external_urls?.spotify || `https://open.spotify.com/album/${album.id}`,
     searchQuery: `${artists.split(', ')[0] || ''} ${String(album.name || '').replace(/\s*[\(\[].*$/, '')}`.trim(), accent: MEDIA_ACCENTS[index % MEDIA_ACCENTS.length],
   };
 }
@@ -362,6 +362,155 @@ async function testSpotify(value = {}) {
   const token = await spotifyAccessToken(clientId, clientSecret);
   await spotifyGet(token, '/search', { q: 'genre:"pop"', type: 'album', market: 'PT' });
   return { appName: 'Spotify' };
+}
+
+// ---- Spotify Connect: comando remoto (Premium) com login OAuth PKCE ----
+// O Spotify só entrega faixas completas a apps com DRM (Widevine), que o Electron normal não tem.
+// Por isso a app autentica a conta e COMANDA o Spotify aberto num dispositivo (PC ou telemóvel).
+const SPOTIFY_REDIRECT_PORT = 8898;
+const SPOTIFY_REDIRECT_URI = `http://127.0.0.1:${SPOTIFY_REDIRECT_PORT}/callback`;
+const SPOTIFY_USER_FILE = 'spotify-user.bin';
+const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+let spotifyUser = null;
+let spotifyLoginServer = null;
+
+const spotifyUserPath = () => path.join(app.getPath('userData'), SPOTIFY_USER_FILE);
+
+async function loadSpotifyUser() {
+  if (spotifyUser) return spotifyUser;
+  try {
+    const encrypted = await fs.readFile(spotifyUserPath());
+    const { result } = await safeStorage.decryptStringAsync(encrypted);
+    spotifyUser = JSON.parse(result);
+  } catch { spotifyUser = null; }
+  return spotifyUser;
+}
+
+async function saveSpotifyUser(value) {
+  spotifyUser = value;
+  if (!value) { await fs.rm(spotifyUserPath(), { force: true }); return; }
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
+  await fs.writeFile(spotifyUserPath(), await safeStorage.encryptStringAsync(JSON.stringify(value)));
+}
+
+async function spotifyTokenRequest(params) {
+  const response = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error_description || `O Spotify recusou o pedido (${response.status}).`);
+  return data;
+}
+
+async function spotifyUserToken() {
+  const user = await loadSpotifyUser();
+  if (!user?.refreshToken) throw new Error('Liga primeiro a tua conta Spotify.');
+  if (user.accessToken && user.expiresAt > Date.now() + 30000) return user.accessToken;
+  const { spotifyClientId } = await readIntegrations();
+  if (!spotifyClientId) throw new Error('Indica o Client ID do Spotify nas Integrações.');
+  const data = await spotifyTokenRequest({ grant_type: 'refresh_token', refresh_token: user.refreshToken, client_id: spotifyClientId });
+  await saveSpotifyUser({ ...user, accessToken: data.access_token, refreshToken: data.refresh_token || user.refreshToken, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 });
+  return data.access_token;
+}
+
+async function spotifyConnectStatus() {
+  const { spotifyClientId } = await readIntegrations();
+  const user = await loadSpotifyUser();
+  return { configured: Boolean(spotifyClientId), connected: Boolean(user?.refreshToken), redirectUri: SPOTIFY_REDIRECT_URI, name: user?.name || '' };
+}
+
+async function spotifyConnectLogin() {
+  const { spotifyClientId } = await readIntegrations();
+  if (!spotifyClientId) throw new Error('Indica o Client ID do Spotify nas Integrações.');
+  const crypto = require('node:crypto');
+  const verifier = crypto.randomBytes(64).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const state = crypto.randomBytes(16).toString('hex');
+  spotifyLoginServer?.close();
+  const code = await new Promise((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      const url = new URL(request.url, SPOTIFY_REDIRECT_URI);
+      if (url.pathname !== '/callback') { response.writeHead(404).end(); return; }
+      const ok = url.searchParams.get('state') === state && url.searchParams.get('code');
+      response.writeHead(ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh"><div><h2>${ok ? 'Spotify ligado ao StreamNexus' : 'Não foi possível ligar o Spotify'}</h2><p>Já podes fechar esta janela e voltar à app.</p></div>`);
+      clearTimeout(timer);
+      server.close();
+      if (ok) resolve(url.searchParams.get('code')); else reject(new Error(url.searchParams.get('error') || 'O Spotify recusou a ligação.'));
+    });
+    const timer = setTimeout(() => { server.close(); reject(new Error('A ligação ao Spotify expirou. Tenta de novo.')); }, 3 * 60 * 1000);
+    server.on('error', (error) => { clearTimeout(timer); reject(new Error(error.code === 'EADDRINUSE' ? `A porta ${SPOTIFY_REDIRECT_PORT} está ocupada. Fecha outra instância do StreamNexus e tenta de novo.` : error.message)); });
+    server.listen(SPOTIFY_REDIRECT_PORT, '127.0.0.1', () => {
+      spotifyLoginServer = server;
+      const authorize = new URL('https://accounts.spotify.com/authorize');
+      authorize.search = new URLSearchParams({ response_type: 'code', client_id: spotifyClientId, redirect_uri: SPOTIFY_REDIRECT_URI, scope: SPOTIFY_SCOPES, state, code_challenge_method: 'S256', code_challenge: challenge }).toString();
+      shell.openExternal(authorize.toString());
+    });
+  });
+  const data = await spotifyTokenRequest({ grant_type: 'authorization_code', code, redirect_uri: SPOTIFY_REDIRECT_URI, client_id: spotifyClientId, code_verifier: verifier });
+  await saveSpotifyUser({ accessToken: data.access_token, refreshToken: data.refresh_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 });
+  let name = '';
+  try { name = (await spotifyUserApi('GET', '/me'))?.display_name || ''; } catch { /* o nome é opcional */ }
+  await saveSpotifyUser({ ...spotifyUser, name });
+  return { connected: true, name };
+}
+
+async function spotifyConnectLogout() { await saveSpotifyUser(null); return { connected: false }; }
+
+async function spotifyUserApi(method, resource, body, query) {
+  const call = async () => fetch(`https://api.spotify.com/v1${resource}${query ? `?${new URLSearchParams(query)}` : ''}`, { method, headers: { Authorization: `Bearer ${await spotifyUserToken()}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  let response = await call();
+  if (response.status === 401 && spotifyUser) { spotifyUser.expiresAt = 0; response = await call(); }
+  if (response.status === 204 || response.status === 202) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const reason = data?.error?.reason || '';
+    const error = new Error(reason === 'NO_ACTIVE_DEVICE' || response.status === 404 ? 'NO_DEVICE' : reason === 'PREMIUM_REQUIRED' || response.status === 403 ? 'A conta Spotify tem de ser Premium para ser comandada por outras apps.' : (data?.error?.message || `O Spotify respondeu com erro ${response.status}.`));
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function spotifyConnectState() {
+  const data = await spotifyUserApi('GET', '/me/player', null, { additional_types: 'track' });
+  if (!data?.item) return { active: false, device: data?.device?.name || '' };
+  const item = data.item;
+  const art = [...(item.album?.images || [])].sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || '';
+  return { active: true, playing: Boolean(data.is_playing), title: item.name, artist: (item.artists || []).map((artist) => artist.name).join(', '), album: item.album?.name || '', cover: art, progress: data.progress_ms || 0, duration: item.duration_ms || 0, device: data.device?.name || '', volume: data.device?.volume_percent ?? null };
+}
+
+async function spotifyConnectCommand(value = {}) {
+  const action = String(value.action || '');
+  const withDevice = async (run) => {
+    try { return await run({}); } catch (error) {
+      if (error.message !== 'NO_DEVICE') throw error;
+      const devices = (await spotifyUserApi('GET', '/me/player/devices'))?.devices || [];
+      const target = devices.find((device) => device.is_active) || devices[0];
+      if (!target) throw new Error('Abre o Spotify no teu PC ou telemóvel (qualquer dispositivo com sessão iniciada) e tenta de novo.');
+      return run({ device_id: target.id });
+    }
+  };
+  if (action === 'play') {
+    let uri = String(value.uri || '');
+    if (!uri) {
+      const token = await spotifyUserToken();
+      const q = `album:${String(value.album || '').replace(/["]/g, ' ')} artist:${String(value.artist || '').replace(/["]/g, ' ')}`.trim();
+      const found = await spotifyGet(token, '/search', { q, type: 'album', limit: '1', market: 'PT' });
+      uri = found.albums?.items?.[0]?.uri || '';
+      if (!uri) { const loose = await spotifyGet(token, '/search', { q: `${value.artist || ''} ${value.album || ''}`.trim(), type: 'album', limit: '1', market: 'PT' }); uri = loose.albums?.items?.[0]?.uri || ''; }
+      if (!uri) throw new Error('Este álbum não foi encontrado no Spotify.');
+    }
+    if (!/^spotify:(album|track|playlist|artist):[A-Za-z0-9]+$/.test(uri)) throw new Error('Endereço Spotify inválido.');
+    const body = uri.startsWith('spotify:track:') ? { uris: [uri] } : { context_uri: uri };
+    await withDevice((query) => spotifyUserApi('PUT', '/me/player/play', body, query));
+    return { ok: true, uri };
+  }
+  if (action === 'resume') { await withDevice((query) => spotifyUserApi('PUT', '/me/player/play', null, query)); return { ok: true }; }
+  if (action === 'pause') { await spotifyUserApi('PUT', '/me/player/pause'); return { ok: true }; }
+  if (action === 'next') { await spotifyUserApi('POST', '/me/player/next'); return { ok: true }; }
+  if (action === 'previous') { await spotifyUserApi('POST', '/me/player/previous'); return { ok: true }; }
+  if (action === 'seek') { await spotifyUserApi('PUT', '/me/player/seek', null, { position_ms: String(Math.max(0, Math.floor(Number(value.positionMs) || 0))) }); return { ok: true }; }
+  if (action === 'volume') { await spotifyUserApi('PUT', '/me/player/volume', null, { volume_percent: String(Math.max(0, Math.min(100, Math.round(Number(value.volume) || 0)))) }); return { ok: true }; }
+  throw new Error('Ação Spotify inválida.');
 }
 
 async function fetchMusicDiscovery() {
@@ -898,13 +1047,21 @@ async function searchAudius(artist, album) {
   return tracks.length ? [{ source: 'Audius', title: 'Faixas encontradas no Audius', creator: '', pageUrl: '', tracks }] : [];
 }
 
+const MUSIC_STOPWORDS = new Set(['the', 'and', 'del', 'les', 'los', 'las', 'der', 'die', 'das', 'van', 'von', 'various', 'artists', 'feat', 'with', 'deluxe', 'edition', 'version', 'remastered', 'remaster', 'original', 'soundtrack', 'motion', 'picture', 'score', 'banda', 'sonora', 'edicao']);
+const musicWords = (text) => bookNorm(text).split(' ').filter((word) => word.length > 1 && !MUSIC_STOPWORDS.has(word));
+// Fração das palavras pedidas que aparecem no texto (0..1)
+const musicCoverage = (wanted, text) => {
+  if (!wanted.length) return 0;
+  const haystack = ` ${bookNorm(text)} `;
+  return wanted.filter((word) => haystack.includes(` ${word} `) || (word.length > 3 && haystack.includes(word))).length / wanted.length;
+};
+
 async function fetchFreeMusic(value = {}) {
   const artist = String(value.artist || '').slice(0, 100);
   const album = String(value.album || '').slice(0, 120);
-  const settled = await Promise.allSettled([searchArchiveAudio(artist, album), searchArchiveAudio(artist, ''), searchAudius(artist, album)]);
-  const words = (text) => bookNorm(text).split(' ').filter((word) => word.length > 2 && !['the', 'and', 'del', 'les', 'los', 'various', 'artists'].includes(word));
-  const wanted = words(artist).length ? words(artist) : words(album);
-  const relevant = (text) => { const haystack = bookNorm(text); return wanted.some((word) => haystack.includes(word)); };
+  const albumWords = musicWords(album);
+  const artistWords = musicWords(artist);
+  const settled = await Promise.allSettled([searchArchiveAudio(artist, album), searchArchiveAudio('', album), searchAudius(artist, album)]);
   const groups = [];
   const seen = new Set();
   for (const entry of settled) {
@@ -913,12 +1070,19 @@ async function fetchFreeMusic(value = {}) {
       const key = `${group.source}|${group.pageUrl || group.title}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (group.source === 'Audius') group.tracks = group.tracks.filter((track) => relevant(track.title));
-      else if (!relevant(`${group.title} ${group.creator}`)) continue;
+      if (group.source === 'Audius') {
+        // faixa individual: tem de falar do álbum/faixa pedido E do artista
+        group.tracks = group.tracks.filter((track) => musicCoverage(albumWords, track.title) >= 0.99 && (!artistWords.length || musicCoverage(artistWords, track.title) >= 0.5));
+        group.title = `Faixas de “${album}” no Audius`;
+      } else {
+        // coleção: o título tem de corresponder ao álbum (todas as palavras) e o autor, quando conhecido, não pode ser outro
+        if (albumWords.length && musicCoverage(albumWords, group.title) < 0.99) continue;
+        if (artistWords.length && musicCoverage(artistWords, `${group.creator} ${group.title}`) < 0.34) continue;
+      }
       if (group.tracks.length) groups.push(group);
     }
   }
-  return groups.slice(0, 6);
+  return groups.slice(0, 4);
 }
 
 // ---- Feeds infinitos: páginas seguintes por prateleira, por categoria e prateleiras extra ----
@@ -1929,6 +2093,11 @@ function registerIpc() {
   ipcMain.handle('books:sources', resultHandler(fetchBookSources));
   ipcMain.handle('app:open-link', resultHandler(openAllowedLink));
   ipcMain.handle('spotify:test', resultHandler(testSpotify));
+  ipcMain.handle('spotify:connect-status', resultHandler(spotifyConnectStatus));
+  ipcMain.handle('spotify:connect-login', resultHandler(spotifyConnectLogin));
+  ipcMain.handle('spotify:connect-logout', resultHandler(spotifyConnectLogout));
+  ipcMain.handle('spotify:connect-state', resultHandler(spotifyConnectState));
+  ipcMain.handle('spotify:connect-command', resultHandler(spotifyConnectCommand));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
   ipcMain.handle('player:prepare-hls', resultHandler(prepareLiveHls));

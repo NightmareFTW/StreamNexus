@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
-import { FreeMusicPanel } from './Music.jsx';
+import { FreeMusicPanel, SpotifyConnectBox } from './Music.jsx';
+import { MiniPlayer } from './MiniPlayer.jsx';
 import { FeedShelves, SearchFeed } from './Feed.jsx';
 import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
@@ -1127,6 +1128,14 @@ function App() {
   const [booksView, setBooksView] = useState('dashboard');
   const [bookSources, setBookSources] = useState({ id: '', status: 'idle', data: null });
   const [musicSources, setMusicSources] = useState({ id: '', status: 'idle', data: null });
+  const [mini, setMini] = useState(null);
+  const playTracks = (queue, index, album) => setMini({ mode: 'tracks', key: `${album.id}-${Date.now()}`, tracks: queue, index, title: album.title, cover: album.poster });
+  const listenOnSpotify = async (album) => {
+    try {
+      await window.streamnexus.spotifyConnectCommand({ action: 'play', uri: album.spotifyUri || '', artist: (album.creator || '').split(',')[0], album: String(album.title || '').replace(/\s*[(\[].*$/, '') });
+      setMini({ mode: 'spotify', key: `${album.id}-${Date.now()}`, title: album.title, cover: album.poster });
+    } catch (error) { notify(getError(error), 'error'); }
+  };
   const showDiscover = activePage !== 'books' || booksView === 'discover';
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
@@ -1433,7 +1442,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${mini ? 'has-mini' : ''}`}>
       <aside className="sidebar">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); setActivePage('home'); }} aria-label="StreamNexus, início">
           <span className="brand-mark"><span></span><span></span></span>
@@ -1544,6 +1553,7 @@ function App() {
 
       <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
+      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => setMini(null)} onError={(message) => notify(message, 'error')}/>}
       {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
@@ -1566,7 +1576,8 @@ function App() {
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
             {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
-            {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
+            {selectedTitle.type === 'Álbum' && <SpotifyConnectBox album={selectedTitle} onNotify={notify} onListen={() => listenOnSpotify(selectedTitle)}/>}
+            {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} activeUrl={mini?.mode === 'tracks' ? mini.tracks[mini.index]?.url : ''} onPlay={(queue, index) => playTracks(queue, index, selectedTitle)} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>
           </div>
@@ -1596,7 +1607,7 @@ function App() {
             <button type="button" className="button button-quiet integration-test-button" onClick={testTmdb}>Testar TMDB</button>
 
             <div className="integration-group-title">Spotify (opcional)</div>
-            <small className="integration-help">Cria uma app em developer.spotify.com e cola aqui o Client ID e o Client Secret. Melhora a aba Música; sem isto é usado o iTunes.</small>
+            <small className="integration-help">Cria uma app em developer.spotify.com e cola aqui o Client ID e o Client Secret. Melhora a aba Música; sem isto é usado o iTunes. Para ouvir com a tua conta Premium (comando remoto), adiciona também http://127.0.0.1:8898/callback como Redirect URI da app e liga a conta no ecrã de um álbum.</small>
             <label className="input-label" htmlFor="spotify-id">Client ID</label><input id="spotify-id" className="text-input" autoComplete="off" placeholder="Client ID do Spotify" value={integrationForm.spotifyClientId || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientId: event.target.value }))}/>
             <label className="input-label" htmlFor="spotify-secret">Client Secret</label><input id="spotify-secret" className="text-input" type="password" autoComplete="off" placeholder="Client Secret do Spotify" value={integrationForm.spotifyClientSecret || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientSecret: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testSpotify}>Testar Spotify</button>
