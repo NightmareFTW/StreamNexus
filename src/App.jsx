@@ -1167,10 +1167,11 @@ function App() {
   const [bookSources, setBookSources] = useState({ id: '', status: 'idle', data: null });
   const [musicSources, setMusicSources] = useState({ id: '', status: 'idle', data: null });
   const [mini, setMini] = useState(null);
+  const [spotifyNow, setSpotifyNow] = useState('');
   const playTracks = (queue, index, album) => setMini({ mode: 'tracks', key: `${album.id}-${Date.now()}`, tracks: queue, index, title: album.title, cover: album.poster });
-  const listenOnSpotify = async (album) => {
+  const listenOnSpotify = async (album, options = {}) => {
     try {
-      await window.streamnexus.spotifyConnectCommand({ action: 'play', uri: album.spotifyUri || '', artist: (album.creator || '').split(',')[0], album: String(album.title || '').replace(/\s*[(\[].*$/, '') });
+      await window.streamnexus.spotifyConnectCommand({ action: 'play', uri: options.albumUri || album.spotifyUri || '', trackUri: options.trackUri || '', shuffle: options.shuffle, repeat: options.repeat, artist: (album.creator || '').split(',')[0], album: String(album.title || '').replace(/\s*[(\[].*$/, '') });
       setMini({ mode: 'spotify', key: `${album.id}-${Date.now()}`, title: album.title, cover: album.poster });
     } catch (error) { notify(getError(error), 'error'); }
   };
@@ -1591,7 +1592,7 @@ function App() {
 
       <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')}/>}
+      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')} onRemote={(state) => setSpotifyNow(state?.uri || '')}/>}
       {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); setActiveSubId(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
@@ -1614,7 +1615,7 @@ function App() {
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
             {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
-            {selectedTitle.type === 'Álbum' && <SpotifyConnectBox album={selectedTitle} onNotify={notify} onListen={() => listenOnSpotify(selectedTitle)}/>}
+            {selectedTitle.type === 'Álbum' && <SpotifyConnectBox album={selectedTitle} onNotify={notify} activeUri={mini?.mode === 'spotify' ? spotifyNow : ''} onListen={(options) => listenOnSpotify(selectedTitle, options)}/>}
             {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} activeUrl={mini?.mode === 'tracks' ? mini.tracks[mini.index]?.url : ''} onPlay={(queue, index) => playTracks(queue, index, selectedTitle)} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             <ReleaseSearchPanel title={selectedTitle} search={releaseSearch} connected={Boolean(session?.access_token)} busyId={releaseBusyId} configured={Boolean(integrationSettings.prowlarrUrl && integrationSettings.prowlarrApiKey)} onRefresh={() => searchReleaseSources(selectedTitle.searchQuery || selectedTitle.original || selectedTitle.title, titleCategory(selectedTitle), selectedTitle.id)} onConfigure={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }} onAdd={grabRelease}/>
             <RdTitleMatches title={selectedTitle} search={rdSearch} connected={Boolean(session?.access_token)} onRefresh={() => searchTitleInLibrary(selectedTitle)} onConnect={() => setModal({ type: 'connect' })} onAdd={() => startPlayback(selectedTitle)} onOpen={(torrent) => openTorrentStream(torrent, selectedTitle)}/>

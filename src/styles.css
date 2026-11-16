@@ -935,3 +935,23 @@ html, body { background: #070707; }
 /* Legendas: opção ativa na lista */
 .subtitle-option.is-active { border-color: rgba(111,220,154,.55); background: rgba(111,220,154,.09); }
 .subtitle-option.is-active > span:last-child { color: #9de1b8; }
+
+
+/* Mini leitor: aleatório/repetir; lista de faixas do Spotify */
+.mini-player { width: 340px; }
+.mini-controls { gap: 6px; }
+.mini-volume input { width: 56px; }
+.mini-toggle { color: #8d8d99; }
+.mini-toggle.on { color: #fff; background: rgba(229,9,20,.28); }
+.sp-toggle.on { border-color: rgba(229,9,20,.6); color: #fff; background: rgba(229,9,20,.18); }
+.sp-tracks { margin-top: 10px; }
+.sp-tracks ol { display: grid; gap: 2px; max-height: 260px; margin: 0; padding: 0; overflow: auto; list-style: none; scrollbar-width: thin; }
+.sp-tracks li button { display: grid; grid-template-columns: 26px minmax(0,1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; color: #d5d5db; background: transparent; text-align: left; cursor: pointer; }
+.sp-tracks li button:hover:not(:disabled) { background: rgba(255,255,255,.07); }
+.sp-tracks li button:disabled { opacity: .4; cursor: default; }
+.sp-tracks li button.active { color: #fff; background: rgba(229,9,20,.18); }
+.sp-num { color: #8d8d99; font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
+.sp-name { display: grid; min-width: 0; font-size: 12px; font-weight: 600; }
+.sp-name > small { overflow: hidden; color: #8d8d99; font-size: 10px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.sp-name i { margin-left: 6px; padding: 0 4px; border-radius: 2px; color: #bbb; background: rgba(255,255,255,.14); font-size: 8px; font-style: normal; }
+.sp-tracks em { color: #8d8d99; font-size: 11px; font-style: normal; font-variant-numeric: tabular-nums; }

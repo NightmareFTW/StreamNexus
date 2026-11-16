@@ -10,7 +10,7 @@ const readMinimized = () => { try { return window.localStorage.getItem('streamne
 // Mini leitor global: fica montado enquanto se navega. Dois modos:
 //  - 'tracks': faixas completas gratuitas tocadas aqui (elemento <audio>)
 //  - 'spotify': comando remoto do Spotify (Premium) aberto noutro dispositivo
-export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
+export function MiniPlayer({ mini, suspended, onIndex, onClose, onError, onRemote }) {
   const audioRef = useRef(null);
   const [minimized, setMinimized] = useState(readMinimized);
   const [playing, setPlaying] = useState(false);
@@ -19,6 +19,12 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
   const [volume, setVolume] = useState(0.9);
   const [remote, setRemote] = useState(null);
   const [remoteError, setRemoteError] = useState('');
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState('off');
+  const historyRef = useRef([]);
+  const lastPlayerError = useRef('');
+  const callbacks = useRef({});
+  callbacks.current = { onRemote, onError };
   const isSpotify = mini.mode === 'spotify';
   const track = isSpotify ? null : mini.tracks[mini.index];
 
@@ -35,6 +41,15 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
     const next = mini.index + delta;
     if (next >= 0 && next < mini.tracks.length) onIndex(next);
   }, [mini, onIndex]);
+  const goTo = useCallback((index) => { historyRef.current.push(mini.index); onIndex(index); }, [mini.index, onIndex]);
+  const advance = useCallback((automatic) => {
+    const total = mini.tracks.length;
+    if (automatic && repeat === 'one') { const audio = audioRef.current; if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); } return; }
+    if (shuffle && total > 1) { let pick = mini.index; while (pick === mini.index) pick = Math.floor(Math.random() * total); goTo(pick); return; }
+    if (mini.index + 1 < total) { goTo(mini.index + 1); return; }
+    if (repeat !== 'off' && total > 0) { goTo(0); return; }
+    setPlaying(false);
+  }, [mini, repeat, shuffle, goTo]);
 
   // --- modo Spotify: sondagem do estado + progresso interpolado ---
   const refreshRemote = useCallback(async () => {
@@ -42,6 +57,8 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
       const state = await window.streamnexus.spotifyConnectState();
       setRemote(state);
       setRemoteError('');
+      callbacks.current.onRemote?.(state);
+      if (state?.playerError && state.playerError !== lastPlayerError.current) { lastPlayerError.current = state.playerError; callbacks.current.onError?.(`Spotify: ${state.playerError}`); }
     } catch (error) { setRemoteError(error?.message || 'Não foi possível ler o estado do Spotify.'); }
   }, []);
   useEffect(() => {
@@ -78,17 +95,33 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
     setVolume(value);
     if (isSpotify) command({ action: 'volume', volume: value * 100 });
   };
-  const canPrev = isSpotify ? true : mini.index > 0;
-  const canNext = isSpotify ? true : mini.index + 1 < mini.tracks.length;
-  const prev = () => (isSpotify ? command({ action: 'previous' }) : (audioRef.current?.currentTime > 4 ? seek(0) : step(-1)));
-  const next = () => (isSpotify ? command({ action: 'next' }) : step(1));
+  const canPrev = isSpotify ? true : mini.index > 0 || historyRef.current.length > 0;
+  const canNext = isSpotify ? true : shuffle || repeat !== 'off' || mini.index + 1 < mini.tracks.length;
+  const prev = () => {
+    if (isSpotify) { command({ action: 'previous' }); return; }
+    if (audioRef.current?.currentTime > 4) { seek(0); return; }
+    const back = historyRef.current.pop();
+    if (back !== undefined) onIndex(back); else step(-1);
+  };
+  const next = () => (isSpotify ? command({ action: 'next' }) : advance(false));
+  const shuffleOn = isSpotify ? Boolean(remote?.shuffle) : shuffle;
+  const repeatMode = isSpotify ? (remote?.repeat || 'off') : repeat;
+  const toggleShuffle = () => {
+    if (isSpotify) { setRemote((current) => (current ? { ...current, shuffle: !current.shuffle } : current)); command({ action: 'shuffle', value: !remote?.shuffle }); return; }
+    setShuffle((value) => !value);
+  };
+  const cycleRepeat = () => {
+    if (isSpotify) { const nextMode = repeatMode === 'off' ? 'context' : repeatMode === 'context' ? 'track' : 'off'; setRemote((current) => (current ? { ...current, repeat: nextMode } : current)); command({ action: 'repeat', value: nextMode }); return; }
+    setRepeat((value) => (value === 'off' ? 'all' : value === 'all' ? 'one' : 'off'));
+  };
+  const repeatLabel = repeatMode === 'off' ? 'Repetir: desligado' : repeatMode === 'track' || repeatMode === 'one' ? 'Repetir a faixa' : 'Repetir o álbum';
 
   return <div className={`mini-player ${minimized ? 'is-min' : ''} ${suspended ? 'is-suspended' : ''}`} role="region" aria-label="Mini leitor de música">
     {!isSpotify && track && <audio ref={audioRef} key={track.url} src={track.url} autoPlay
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
       onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
-      onEnded={() => (canNext ? step(1) : setPlaying(false))}
-      onError={() => { onError?.(`Não foi possível reproduzir “${track.title}”.`); if (canNext) step(1); }}/>}
+      onEnded={() => advance(true)}
+      onError={() => { onError?.(`Não foi possível reproduzir “${track.title}”.`); advance(false); }}/>}
     {minimized ? <>
       <div className="mini-cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}><Icon name="music" size={16}/></div>
       <div className="mini-info"><strong title={title}>{title}</strong><small>{subtitle}</small></div>
@@ -109,9 +142,11 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError }) {
       </div>
       <div className="mini-seek"><span>{clock(position)}</span><input type="range" min="0" max={Math.max(1, total)} step="1" value={Math.min(position, Math.max(1, total))} aria-label="Posição" onChange={(event) => seek(Number(event.target.value))}/><span>{clock(total)}</span></div>
       <div className="mini-controls">
+        <button className={`mini-btn mini-toggle ${shuffleOn ? 'on' : ''}`} aria-label="Aleatório" aria-pressed={shuffleOn} title={shuffleOn ? 'Aleatório: ligado' : 'Aleatório: desligado'} onClick={toggleShuffle}><Icon name="shuffle" size={16}/></button>
         <button className="mini-btn" aria-label="Anterior" disabled={!canPrev} onClick={prev}><Glyph d={PREV}/></button>
         <button className="mini-btn mini-btn-main" aria-label={isPlaying ? 'Pausar' : 'Tocar'} onClick={togglePlay}><Icon name={isPlaying ? 'pause' : 'play'} size={17}/></button>
         <button className="mini-btn" aria-label="Seguinte" disabled={!canNext} onClick={next}><Glyph d={NEXT}/></button>
+        <button className={`mini-btn mini-toggle ${repeatMode !== 'off' ? 'on' : ''}`} aria-label="Repetir" title={repeatLabel} onClick={cycleRepeat}><Icon name={repeatMode === 'track' || repeatMode === 'one' ? 'repeatOne' : 'repeat'} size={16}/></button>
         <label className="mini-volume"><Icon name="volume" size={15}/><input type="range" min="0" max="1" step="0.05" value={volume} aria-label="Volume" onChange={(event) => changeVolume(Number(event.target.value))}/></label>
       </div>
     </>}

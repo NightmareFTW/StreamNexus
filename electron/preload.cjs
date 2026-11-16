@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   spotifyConnectLogout: () => invokeRequest('spotify:connect-logout'),
   spotifyConnectState: () => invokeRequest('spotify:connect-state'),
   spotifyConnectCommand: (value) => invokeRequest('spotify:connect-command', value),
+  spotifyAlbumTracks: (value) => invokeRequest('spotify:album-tracks', value),
   fetchLiveCountries: () => invokeRequest('tv:countries'),
   fetchLiveChannels: (country) => invokeRequest('tv:channels', { country }),
   fetchAdultVideos: (term, orientation) => invokeRequest('adult:videos', { term, orientation }),

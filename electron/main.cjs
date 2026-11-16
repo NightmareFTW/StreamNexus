@@ -418,6 +418,11 @@ const WIDEVINE_AVAILABLE = Boolean(components);
 let spotifyPlayerWindow = null;
 let spotifyPlayerServer = null;
 let spotifyPlayerState = { ready: false, deviceId: '', error: '' };
+let spotifyPlayerLastError = { message: '', at: 0 };
+const spotifyPlayerLogPath = () => path.join(app.getPath('userData'), 'spotify-player.log');
+function logSpotifyPlayer(line) {
+  fs.appendFile(spotifyPlayerLogPath(), `${new Date().toISOString()} ${line}\n`).catch(() => {});
+}
 let spotifyPlayerWaiters = [];
 
 const SPOTIFY_PLAYER_HTML = `<!doctype html><meta charset="utf-8"><title>StreamNexus · Spotify</title>
@@ -428,7 +433,10 @@ window.onSpotifyWebPlaybackSDKReady = () => {
   player.addListener('ready', ({ device_id }) => bridge.report({ type: 'ready', deviceId: device_id }));
   player.addListener('not_ready', () => bridge.report({ type: 'not_ready' }));
   ['initialization_error', 'authentication_error', 'account_error', 'playback_error'].forEach((kind) => player.addListener(kind, ({ message }) => bridge.report({ type: 'error', kind, message })));
+  player.addListener('autoplay_failed', () => bridge.report({ type: 'error', kind: 'playback_error', message: 'O navegador bloqueou o arranque automático do som.' }));
+  player.addListener('player_state_changed', (state) => { if (!state) { bridge.report({ type: 'state', empty: true }); return; } const track = state.track_window && state.track_window.current_track; bridge.report({ type: 'state', paused: state.paused, loading: state.loading, position: state.position, duration: state.duration, name: track && track.name, uri: track && track.uri, next: (state.track_window && state.track_window.next_tracks || []).length, shuffle: state.shuffle, repeat: state.repeat_mode }); });
   player.connect().then((ok) => { if (!ok) bridge.report({ type: 'error', kind: 'connect', message: 'O Spotify recusou a ligação do leitor. Volta a ligar a conta Spotify.' }); });
+  try { player.activateElement(); } catch (error) { /* só é necessário em alguns browsers */ }
   bridge.onCommand(({ action, value }) => { if (action === 'volume') player.setVolume(value); });
 };
 </script>
@@ -441,6 +449,7 @@ function notifySpotifyPlayerWaiters() {
 }
 
 function handleSpotifyPlayerEvent(event) {
+  logSpotifyPlayer(JSON.stringify(event));
   if (event?.type === 'ready') spotifyPlayerState = { ready: true, deviceId: String(event.deviceId || ''), error: '' };
   else if (event?.type === 'not_ready') spotifyPlayerState = { ...spotifyPlayerState, ready: false };
   else if (event?.type === 'error') {
@@ -449,7 +458,8 @@ function handleSpotifyPlayerEvent(event) {
       authentication_error: 'O Spotify recusou a sessão. Volta a ligar a conta Spotify.',
       account_error: 'A conta Spotify tem de ser Premium para tocar dentro da app.',
     }[event.kind];
-    if (event.kind !== 'playback_error') spotifyPlayerState = { ready: false, deviceId: '', error: reason || event.message || 'Erro no leitor Spotify.' };
+    if (event.kind === 'playback_error') spotifyPlayerLastError = { message: event.message || 'Erro de reprodução no Spotify.', at: Date.now() };
+    else spotifyPlayerState = { ready: false, deviceId: '', error: reason || event.message || 'Erro no leitor Spotify.' };
   }
   notifySpotifyPlayerWaiters();
 }
@@ -553,8 +563,38 @@ async function spotifyConnectState() {
   const data = await spotifyUserApi('GET', '/me/player', null, { additional_types: 'track' });
   if (!data?.item) return { active: false, device: data?.device?.name || '' };
   const item = data.item;
+  const recentError = Date.now() - spotifyPlayerLastError.at < 15000 ? spotifyPlayerLastError.message : '';
   const art = [...(item.album?.images || [])].sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || '';
-  return { active: true, playing: Boolean(data.is_playing), title: item.name, artist: (item.artists || []).map((artist) => artist.name).join(', '), album: item.album?.name || '', cover: art, progress: data.progress_ms || 0, duration: item.duration_ms || 0, device: data.device?.name || '', volume: data.device?.volume_percent ?? null };
+  return { active: true, playing: Boolean(data.is_playing), title: item.name, artist: (item.artists || []).map((artist) => artist.name).join(', '), album: item.album?.name || '', cover: art, progress: data.progress_ms || 0, duration: item.duration_ms || 0, device: data.device?.name || '', volume: data.device?.volume_percent ?? null, shuffle: Boolean(data.shuffle_state), repeat: data.repeat_state || 'off', uri: item.uri || '', albumUri: item.album?.uri || '', playerError: recentError };
+}
+
+async function resolveSpotifyAlbumUri(value = {}) {
+  let uri = String(value.uri || '');
+  if (!uri) {
+    const token = await spotifyUserToken();
+    const q = `album:${String(value.album || '').replace(/["]/g, ' ')} artist:${String(value.artist || '').replace(/["]/g, ' ')}`.trim();
+    const found = await spotifyGet(token, '/search', { q, type: 'album', limit: '1', market: 'PT' });
+    uri = found.albums?.items?.[0]?.uri || '';
+    if (!uri) { const loose = await spotifyGet(token, '/search', { q: `${value.artist || ''} ${value.album || ''}`.trim(), type: 'album', limit: '1', market: 'PT' }); uri = loose.albums?.items?.[0]?.uri || ''; }
+    if (!uri) throw new Error('Este álbum não foi encontrado no Spotify.');
+  }
+  if (!/^spotify:(album|track|playlist|artist):[A-Za-z0-9]+$/.test(uri)) throw new Error('Endereço Spotify inválido.');
+  return uri;
+}
+
+// Faixas de um álbum (para escolher qual tocar)
+async function spotifyAlbumTracks(value = {}) {
+  const uri = await resolveSpotifyAlbumUri(value);
+  if (!uri.startsWith('spotify:album:')) throw new Error('Só é possível listar faixas de álbuns.');
+  const token = await spotifyUserToken();
+  const id = uri.split(':')[2];
+  const tracks = [];
+  for (let offset = 0; offset < 200; offset += 50) {
+    const page = await spotifyGet(token, `/albums/${id}/tracks`, { limit: '50', offset: String(offset), market: 'PT' });
+    (page.items || []).forEach((track) => tracks.push({ uri: track.uri, name: track.name, number: track.track_number, disc: track.disc_number, duration: Math.round((track.duration_ms || 0) / 1000), artists: (track.artists || []).map((artist) => artist.name).join(', '), explicit: Boolean(track.explicit), playable: track.is_playable !== false }));
+    if (!page.next) break;
+  }
+  return { uri, tracks };
 }
 
 async function spotifyConnectCommand(value = {}) {
@@ -577,20 +617,20 @@ async function spotifyConnectCommand(value = {}) {
     }
   };
   if (action === 'play') {
-    let uri = String(value.uri || '');
-    if (!uri) {
-      const token = await spotifyUserToken();
-      const q = `album:${String(value.album || '').replace(/["]/g, ' ')} artist:${String(value.artist || '').replace(/["]/g, ' ')}`.trim();
-      const found = await spotifyGet(token, '/search', { q, type: 'album', limit: '1', market: 'PT' });
-      uri = found.albums?.items?.[0]?.uri || '';
-      if (!uri) { const loose = await spotifyGet(token, '/search', { q: `${value.artist || ''} ${value.album || ''}`.trim(), type: 'album', limit: '1', market: 'PT' }); uri = loose.albums?.items?.[0]?.uri || ''; }
-      if (!uri) throw new Error('Este álbum não foi encontrado no Spotify.');
-    }
-    if (!/^spotify:(album|track|playlist|artist):[A-Za-z0-9]+$/.test(uri)) throw new Error('Endereço Spotify inválido.');
-    const body = uri.startsWith('spotify:track:') ? { uris: [uri] } : { context_uri: uri };
-    await withDevice((query) => spotifyUserApi('PUT', '/me/player/play', body, query));
-    return { ok: true, uri };
+    const uri = await resolveSpotifyAlbumUri(value);
+    const trackUri = /^spotify:track:[A-Za-z0-9]+$/.test(String(value.trackUri || '')) ? String(value.trackUri) : '';
+    const body = uri.startsWith('spotify:track:') ? { uris: [uri] } : { context_uri: uri, ...(trackUri ? { offset: { uri: trackUri } } : {}) };
+    // Aleatório e repetição têm de estar definidos ANTES de arrancar, senão o Spotify mantém o estado anterior
+    const query = await withDevice(async (target) => {
+      if (typeof value.shuffle === 'boolean') await spotifyUserApi('PUT', '/me/player/shuffle', null, { state: String(value.shuffle), ...target }).catch(() => {});
+      if (['off', 'context', 'track'].includes(value.repeat)) await spotifyUserApi('PUT', '/me/player/repeat', null, { state: value.repeat, ...target }).catch(() => {});
+      await spotifyUserApi('PUT', '/me/player/play', body, target);
+      return target;
+    });
+    return { ok: true, uri, device: query.device_id || '' };
   }
+  if (action === 'shuffle') { await spotifyUserApi('PUT', '/me/player/shuffle', null, { state: String(Boolean(value.value)) }); return { ok: true }; }
+  if (action === 'repeat') { await spotifyUserApi('PUT', '/me/player/repeat', null, { state: ['off', 'context', 'track'].includes(value.value) ? value.value : 'off' }); return { ok: true }; }
   if (action === 'resume') { await withDevice((query) => spotifyUserApi('PUT', '/me/player/play', null, query)); return { ok: true }; }
   if (action === 'pause') { await spotifyUserApi('PUT', '/me/player/pause'); return { ok: true }; }
   if (action === 'next') { await spotifyUserApi('POST', '/me/player/next'); return { ok: true }; }
@@ -2208,6 +2248,7 @@ function registerIpc() {
   ipcMain.handle('spotify:connect-logout', resultHandler(spotifyConnectLogout));
   ipcMain.handle('spotify:connect-state', resultHandler(spotifyConnectState));
   ipcMain.handle('spotify:connect-command', resultHandler(spotifyConnectCommand));
+  ipcMain.handle('spotify:album-tracks', resultHandler(spotifyAlbumTracks));
   ipcMain.handle('player:external', resultHandler(openExternalPlayer));
   ipcMain.handle('player:prepare-audio', resultHandler(prepareAudioStream));
   ipcMain.handle('player:prepare-hls', resultHandler(prepareLiveHls));
@@ -2255,6 +2296,8 @@ function createMainWindow() {
 
 app.setAppUserModelId('com.streamnexus.desktop');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.whenReady().then(() => {
   configureContentSecurityPolicy();
   registerIpc();
