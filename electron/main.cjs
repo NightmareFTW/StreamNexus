@@ -1546,6 +1546,23 @@ function validateRealDebridStreamUrl(value) {
   return url.toString();
 }
 
+// Lista as faixas de áudio (idioma, título, codec, canais) a partir da saída do `ffmpeg -i`.
+const AUDIO_LANGS = { por: 'Português', pt: 'Português', eng: 'Inglês', en: 'Inglês', spa: 'Espanhol', es: 'Espanhol', fra: 'Francês', fre: 'Francês', fr: 'Francês', deu: 'Alemão', ger: 'Alemão', de: 'Alemão', ita: 'Italiano', it: 'Italiano', jpn: 'Japonês', ja: 'Japonês', kor: 'Coreano', ko: 'Coreano', zho: 'Chinês', chi: 'Chinês', zh: 'Chinês', rus: 'Russo', ru: 'Russo', ara: 'Árabe', hin: 'Hindi', pol: 'Polaco', nld: 'Neerlandês', dut: 'Neerlandês', swe: 'Sueco', nor: 'Norueguês', dan: 'Dinamarquês', fin: 'Finlandês', tur: 'Turco', ces: 'Checo', cze: 'Checo', hun: 'Húngaro', ron: 'Romeno', rum: 'Romeno', ell: 'Grego', gre: 'Grego', heb: 'Hebraico', tha: 'Tailandês', vie: 'Vietnamita', ind: 'Indonésio', ukr: 'Ucraniano', cat: 'Catalão' };
+function parseAudioTracks(output) {
+  const blocks = String(output || '').split(/\n(?=\s*Stream #0:)/);
+  const tracks = [];
+  for (const block of blocks) {
+    const head = block.match(/^\s*Stream #0:\d+(?:\[[^\]]*\])?(?:\(([^)]*)\))?[^:\n]*:\s*Audio:\s*([a-z0-9_]+)([^\n]*)/i);
+    if (!head) continue;
+    const lang = (head[1] || '').toLowerCase();
+    const detail = head[3] || '';
+    const channels = /\b(mono|stereo)\b/i.exec(detail)?.[1] || /\b(\d\.\d)(?:\([^)]*\))?/.exec(detail)?.[1] || '';
+    const title = block.match(/\n\s*title\s*:\s*(.+)/i)?.[1]?.trim() || '';
+    tracks.push({ index: tracks.length, lang, label: AUDIO_LANGS[lang] || (lang && lang !== 'und' ? lang.toUpperCase() : 'Desconhecido'), title, codec: head[2].toLowerCase(), channels: channels.toLowerCase() === 'stereo' ? '2.0' : channels.toLowerCase() === 'mono' ? '1.0' : channels, default: /\(default\)/i.test(detail) });
+  }
+  return tracks;
+}
+
 // Lê container e codecs com `ffmpeg -i` (o ffmpeg-static não inclui o ffprobe).
 function probeMedia(executable, sourceUrl, inputArgs = []) {
   return new Promise((resolve) => {
@@ -1560,10 +1577,11 @@ function probeMedia(executable, sourceUrl, inputArgs = []) {
         video: videoLine?.[1]?.toLowerCase() || '',
         tenBit: Boolean(videoLine && /10le|p10|10be/i.test(videoLine[0])),
         audio: output.match(/Audio:\s*([a-z0-9_]+)/i)?.[1]?.toLowerCase() || '',
+        audioTracks: parseAudioTracks(output),
         duration: (() => { const found = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/); return found ? Number(found[1]) * 3600 + Number(found[2]) * 60 + Number(found[3]) : 0; })(),
       };
     };
-    child.once('error', () => { clearTimeout(timer); resolve({ container: '', video: '', tenBit: false, audio: '', duration: 0 }); });
+    child.once('error', () => { clearTimeout(timer); resolve({ container: '', video: '', tenBit: false, audio: '', audioTracks: [], duration: 0 }); });
     child.once('close', () => { clearTimeout(timer); resolve(parse()); });
   });
 }
@@ -1577,6 +1595,7 @@ async function prepareAudioStream(value) {
   const live = Boolean(value?.live);
   const startAt = Math.max(0, Number(value?.startAt) || 0);
   const quality = ['1080', '720'].includes(String(value?.quality)) ? String(value.quality) : '';
+  const requestedAudio = Number.isInteger(value?.audioIndex) && value.audioIndex >= 0 && value.audioIndex < 64 ? value.audioIndex : -1;
   const sourceUrl = live ? validateLiveStreamUrl(value?.url) : validateRealDebridStreamUrl(value?.url);
   const liveMeta = live ? liveStreamMeta.get(sourceUrl) || {} : {};
   const inputArgs = [
@@ -1589,11 +1608,13 @@ async function prepareAudioStream(value) {
   let probed = null;
   if (!live && !value?.transcodeVideo && !value?.forcePipe) {
     probed = await probeMedia(executable, sourceUrl, inputArgs);
-    if (canPlayDirectly(probed)) return { id: '', url: sourceUrl, direct: true, videoCodec: probed.video, audioCodec: probed.audio, ...(probed.duration ? { totalDuration: probed.duration } : {}) };
+    const defaultAudio = Math.max(0, probed.audioTracks.findIndex((track) => track.default));
+    // Com várias faixas e uma escolha diferente da predefinida, a reprodução direta não serve: o Chromium só toca a faixa por defeito.
+    if (canPlayDirectly(probed) && (requestedAudio < 0 || requestedAudio === defaultAudio)) return { id: '', url: sourceUrl, direct: true, videoCodec: probed.video, audioCodec: probed.audio, audioTracks: probed.audioTracks, audioIndex: defaultAudio, ...(probed.duration ? { totalDuration: probed.duration } : {}) };
   }
   const id = randomUUID();
   const token = randomUUID();
-  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, quality, transcodeVideo: Boolean(value?.transcodeVideo) || Boolean(quality) || Boolean(probed && (probed.tenBit || (probed.video && !['h264', 'vp9', 'av1', 'vp8', 'hevc'].includes(probed.video)))), videoCodec: '', error: '' };
+  const stream = { id, token, sourceUrl, executable, server: null, child: null, started: false, quality, transcodeVideo: Boolean(value?.transcodeVideo) || Boolean(quality) || Boolean(probed && (probed.tenBit || (probed.video && !['h264', 'vp9', 'av1', 'vp8', 'hevc'].includes(probed.video)))), videoCodec: '', error: '', audioIndex: requestedAudio >= 0 ? requestedAudio : Math.max(0, (probed?.audioTracks || []).findIndex((track) => track.default)) };
   stream.server = http.createServer((request, response) => {
     if (request.url !== `/${token}`) {
       response.writeHead(404).end();
@@ -1617,7 +1638,7 @@ async function prepareAudioStream(value) {
       : ['-c:v', 'copy', ...(stream.videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
     const args = [
       '-hide_banner', '-loglevel', 'error', ...inputArgs, ...(startAt ? ['-ss', String(startAt)] : []), '-i', sourceUrl,
-      '-map', '0:v:0?', '-map', '0:a:0?',
+      '-map', '0:v:0?', '-map', `0:a:${stream.audioIndex}?`,
       ...videoArgs, '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
       '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1',
     ];
@@ -1663,7 +1684,7 @@ async function prepareAudioStream(value) {
   });
   audioStreams.set(id, stream);
   const { port } = stream.server.address();
-  return { id, url: `http://127.0.0.1:${port}/${token}`, transcoded: stream.transcodeVideo, ...(probed?.duration ? { totalDuration: probed.duration } : {}) };
+  return { id, url: `http://127.0.0.1:${port}/${token}`, transcoded: stream.transcodeVideo, audioIndex: stream.audioIndex, ...(probed?.audioTracks?.length ? { audioTracks: probed.audioTracks } : {}), ...(probed?.duration ? { totalDuration: probed.duration } : {}) };
 }
 
 // ---- Reprodução HLS direta: proxy local que acrescenta os cabeçalhos exigidos e o CORS ----

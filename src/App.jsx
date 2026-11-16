@@ -564,7 +564,7 @@ function App() {
     if (playing?.hls) { if (!(await fallbackLiveToPipe()) && !tryNextLiveStream()) setPlayerPlaybackError('O leitor integrado não conseguiu abrir este vídeo.'); return; }
     if (playing?.live && playing.piped && tryNextLiveStream()) return;
     if (playing?.direct && playing.sourceUrl && window.streamnexus?.isDesktop) {
-      const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true });
+      const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, audioIndex: playing.audioIndex ?? -1 });
       setPlaying((current) => (current ? { ...current, ...stream, direct: false } : current));
       return;
     }
@@ -586,7 +586,7 @@ function App() {
     if (!playing?.sourceUrl) return;
     setPlayerPlaybackError('');
     setPlaying((current) => current ? { ...current, url: '', id: '', converting: true } : current);
-    const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true, live: Boolean(playing.live) });
+    const stream = await preparePlayerAudio(playing.sourceUrl, { transcodeVideo: true, live: Boolean(playing.live), audioIndex: playing.audioIndex ?? -1 });
     setPlaying((current) => current ? { ...current, ...stream, converting: false, transcoded: true, direct: false } : current);
   };
 
@@ -594,15 +594,23 @@ function App() {
     if (!playing?.sourceUrl || playing.resuming) return;
     const startAt = Math.max(0, Math.floor(position) - (exact ? 0 : 3));
     const quality = options.quality ?? playing.quality ?? (playing.transcoded ? '1080' : 'original');
+    const audioIndex = options.audioIndex ?? playing.audioIndex ?? 0;
     setPlayerPlaybackError('');
     setPlaying((current) => (current ? { ...current, url: '', id: '', resuming: true } : current));
-    const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, transcodeVideo: quality !== 'original', quality: quality === 'original' ? '' : quality, startAt });
+    const stream = await preparePlayerAudio(playing.sourceUrl, { forcePipe: true, transcodeVideo: quality !== 'original', quality: quality === 'original' ? '' : quality, startAt, audioIndex });
     if (stream.audioWarning) {
       setPlaying((current) => (current ? { ...current, resuming: false } : current));
       setPlayerPlaybackError(`Não foi possível retomar a reprodução. ${stream.audioWarning}`);
       return;
     }
-    setPlaying((current) => (current ? { ...current, ...stream, resuming: false, direct: false, offset: startAt, quality, transcoded: quality !== 'original' || Boolean(stream.transcoded), resumes: exact ? current.resumes || 0 : (current.resumes || 0) + 1 } : current));
+    setPlaying((current) => (current ? { ...current, ...stream, resuming: false, direct: false, offset: startAt, quality, audioIndex, transcoded: quality !== 'original' || Boolean(stream.transcoded), resumes: exact ? current.resumes || 0 : (current.resumes || 0) + 1 } : current));
+  };
+
+  const changeAudio = async (audioIndex) => {
+    setAudioMenuOpen(false);
+    if (!playing?.sourceUrl || (playing.audioIndex ?? 0) === audioIndex) return;
+    const position = (playing.offset || 0) + (playerVideoRef.current?.currentTime || 0);
+    await resumePlayback(position, true, { audioIndex });
   };
 
   const changeQuality = async (quality) => {
@@ -624,6 +632,7 @@ function App() {
   const [slowConnection, setSlowConnection] = useState(false);
   const [slowDismissed, setSlowDismissed] = useState(false);
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
 
   useEffect(() => {
     const video = playerVideoRef.current;
@@ -1674,7 +1683,7 @@ function App() {
               <input className="player-seek" aria-label="Posição do filme" type="range" min="0" max={(pipedSeek ? playing.totalDuration : 0) || playerDuration || playerSeekEnd || 1} step="0.1" value={pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerDuration || playerSeekEnd ? Math.min(playerCurrentTime, playerDuration || playerSeekEnd) : 0} disabled={!pipedSeek && !playerDuration && !playerSeekEnd} onChange={(event) => (pipedSeek ? setSeekDraft(Number(event.target.value)) : setPlayerSeekPosition(event.target.value))} onPointerUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }} onKeyUp={() => { if (pipedSeek && seekDraft !== null) { resumePlayback(seekDraft, true); setSeekDraft(null); } }}/>
               <div className="player-control-row">
                 <div className="player-control-group"><button className="player-icon-button" aria-label={playerPlaying ? 'Pausar' : 'Reproduzir'} onClick={togglePlayerPlayback}><Icon name={playerPlaying ? 'pause' : 'play'} size={21}/></button><button className="player-icon-button" aria-label="Recuar 10 segundos" onClick={() => seekPlayer(-10)}><Icon name="skipBack" size={20}/></button><button className="player-icon-button" aria-label="Avançar 10 segundos" onClick={() => seekPlayer(10)}><Icon name="skipForward" size={20}/></button><span className="player-time">{formatPlaybackTime(pipedSeek ? (seekDraft ?? (playing.offset || 0) + playerCurrentTime) : playerCurrentTime)} <i>/</i> {pipedSeek ? formatPlaybackTime(playing.totalDuration) : playerDuration ? formatPlaybackTime(playerDuration) : 'AO VIVO'}</span></div>
-                <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/>{!playing?.live && playing?.sourceUrl && <span className="quality-wrap"><button className={`player-icon-button ${qualityMenuOpen ? 'active' : ''}`} aria-label="Qualidade" title="Qualidade" onClick={() => { setQualityMenuOpen((open) => !open); setSubtitleMenuOpen(false); revealPlayerControls(); }}><Icon name="settings" size={20}/></button>{qualityMenuOpen && <div className="quality-menu"><small>QUALIDADE</small>{[['original', 'Original'], ['1080', '1080p'], ['720', '720p']].map(([key, label]) => <button key={key} className={(playing.quality || 'original') === key ? 'active' : ''} onClick={() => changeQuality(key)}>{label}</button>)}</div>}</span>}<button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
+                <div className="player-control-group player-control-end"><button className="player-icon-button" aria-label={playerMuted ? 'Ativar som' : 'Silenciar'} onClick={togglePlayerMute}><Icon name={playerMuted || playerVolume === 0 ? 'volumeOff' : 'volume'} size={20}/></button><input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step="0.05" value={playerMuted ? 0 : playerVolume} onChange={(event) => { const value = Number(event.target.value); const video = playerVideoRef.current; if (video) { video.volume = value; video.muted = value === 0; } setPlayerVolume(value); setPlayerMuted(value === 0); }}/>{!playing?.live && playing?.sourceUrl && playing?.audioTracks?.length > 1 && <span className="quality-wrap"><button className={`player-icon-button ${audioMenuOpen ? 'active' : ''}`} aria-label="Idioma do áudio" title="Idioma do áudio" onClick={() => { setAudioMenuOpen((open) => !open); setQualityMenuOpen(false); setSubtitleMenuOpen(false); revealPlayerControls(); }}><Icon name="volume" size={20}/></button>{audioMenuOpen && <div className="quality-menu audio-menu"><small>ÁUDIO</small>{playing.audioTracks.map((track) => <button key={track.index} className={(playing.audioIndex ?? 0) === track.index ? 'active' : ''} onClick={() => changeAudio(track.index)}><b>{track.label}</b>{track.title && track.title.toLowerCase() !== track.label.toLowerCase() ? ` · ${track.title}` : ''}<em>{[track.codec.toUpperCase(), track.channels].filter(Boolean).join(' ')}</em></button>)}</div>}</span>}{!playing?.live && playing?.sourceUrl && <span className="quality-wrap"><button className={`player-icon-button ${qualityMenuOpen ? 'active' : ''}`} aria-label="Qualidade" title="Qualidade" onClick={() => { setQualityMenuOpen((open) => !open); setAudioMenuOpen(false); setSubtitleMenuOpen(false); revealPlayerControls(); }}><Icon name="settings" size={20}/></button>{qualityMenuOpen && <div className="quality-menu"><small>QUALIDADE</small>{[['original', 'Original'], ['1080', '1080p'], ['720', '720p']].map(([key, label]) => <button key={key} className={(playing.quality || 'original') === key ? 'active' : ''} onClick={() => changeQuality(key)}>{label}</button>)}</div>}</span>}<button className={`player-icon-button captions-button ${subtitleMenuOpen ? 'active' : ''}`} aria-label="Legendas" aria-expanded={subtitleMenuOpen} title="Legendas" onClick={() => { setSubtitleMenuOpen((open) => !open); revealPlayerControls(); }}><Icon name="captions" size={22}/></button><button className="player-icon-button" aria-label={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} title={playerFullscreen ? 'Sair de ecrã inteiro' : 'Ecrã inteiro'} onClick={togglePlayerFullscreen}><Icon name="fullscreen" size={20}/></button></div>
               </div>
             </div>
           </div>

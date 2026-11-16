@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   feedCategory: (value) => invokeRequest('feed:category', value),
   fetchTrailer: (value) => invokeRequest('tmdb:trailer', value),
   openExternalPlayer: (url) => invokeRequest('player:external', url),
-  prepareAudioStream: (url, options = {}) => invokeRequest('player:prepare-audio', { url, transcodeVideo: Boolean(options.transcodeVideo), live: Boolean(options.live), forcePipe: Boolean(options.forcePipe), startAt: Number(options.startAt) || 0, quality: String(options.quality || '') }),
+  prepareAudioStream: (url, options = {}) => invokeRequest('player:prepare-audio', { url, transcodeVideo: Boolean(options.transcodeVideo), live: Boolean(options.live), forcePipe: Boolean(options.forcePipe), startAt: Number(options.startAt) || 0, quality: String(options.quality || ''), audioIndex: Number.isInteger(options.audioIndex) ? options.audioIndex : -1 }),
   getStreamInfo: (id) => ipcRenderer.invoke('player:stream-info', id),
   stopAudioStream: (id) => ipcRenderer.invoke('player:stop-audio', id),
   setFullscreen: (enabled) => ipcRenderer.invoke('window:fullscreen', Boolean(enabled)),

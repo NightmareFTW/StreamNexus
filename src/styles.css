@@ -923,3 +923,10 @@ html, body { background: #070707; }
 .app-shell.has-mini .toast { bottom: 22px; right: 360px; }
 .spotify-connect code { padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.08); font-size: 11px; user-select: all; }
 @media (max-width: 560px) { .mini-player, .mini-player.is-min { right: 10px; bottom: 10px; width: calc(100vw - 20px); } .app-shell.has-mini .toast { right: 12px; bottom: 96px; } }
+
+
+/* Menu de idioma do áudio */
+.audio-menu { min-width: 220px; }
+.audio-menu button { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
+.audio-menu button b { font-weight: 700; }
+.audio-menu button em { color: #8d8d95; font-size: 10px; font-style: normal; }
