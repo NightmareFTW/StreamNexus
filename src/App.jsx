@@ -95,7 +95,7 @@ function scoreRelease(release, title) {
   return score;
 }
 
-const friendlyRdError = (message) => (/infringing_file/i.test(message) ? 'O Real-Debrid bloqueou este ficheiro (infração de direitos de autor) e não há outra versão disponível para tentar.' : message);
+const friendlyRdError = (message, tried = 0) => (/infringing_file/i.test(message) ? `O Real-Debrid bloqueou ${tried > 1 ? `as ${tried} versões que tentei` : 'este ficheiro'} (infração de direitos de autor). Isto é comum em estreias muito recentes. Tenta mais tarde, ou escolhe outra versão à mão na lista do filme.` : message);
 const RD_STATUS_TEXT = { magnet_conversion: 'A obter os metadados do torrent', waiting_files_selection: 'A escolher o ficheiro de vídeo', queued: 'Na fila do Real-Debrid', downloading: 'A transferir no Real-Debrid', compressing: 'A comprimir', uploading: 'A preparar o ficheiro', downloaded: 'Pronto' };
 
 const titles = [
@@ -821,7 +821,7 @@ function App() {
         timer = window.setTimeout(poll, nextDelay());
       } catch (error) {
         if (cancelled) return;
-        const message = friendlyRdError(getError(error));
+        const message = friendlyRdError(getError(error), (playing.candidates?.length || 0) || (playing.candidateIndex || 0) + 1);
         const final = /infringing|bloquead|blocked|not_available|file_unavailable|permission_denied/i.test(`${getError(error)} ${message}`);
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: message, ...(final ? { pending: false } : {}) } : current);
         if (!final) timer = window.setTimeout(poll, 12000);
@@ -1561,13 +1561,15 @@ function App() {
     setTrailerPlaying(false);
     setPlaying({ title: title.title, url: '', pending: true, phase: 'searching', progress: 0, metadata: title, fileName: title.title, torrentId: '', runId });
     setModal({ type: 'player' });
+    let triedCount = 0;
     try {
       const category = SEARCH_CATEGORIES[titleCategory(title)] || SEARCH_CATEGORIES.movies;
       const reuse = releaseSearch?.titleId === title.id && releaseSearch.status === 'found' ? releaseSearch.items : null;
       const items = reuse || await window.streamnexus.searchReleases({ query: title.searchQuery || title.original || title.title, type: category.type, categories: [category.category] });
       const ranked = items.filter((release) => release.canGrab).map((release) => ({ release, score: scoreRelease(release, title) })).sort((a, b) => b.score - a.score);
       const good = ranked.filter((entry) => entry.score > -150);
-      const candidates = (good.length ? good : ranked).slice(0, 4).map((entry) => entry.release);
+      const candidates = (good.length ? good : ranked).slice(0, 12).map((entry) => entry.release);
+      triedCount = candidates.length;
       if (!candidates.length) throw new Error('Não encontrei nenhum lançamento utilizável para este título. Confirma o Prowlarr nas Integrações.');
       setPlaying((current) => (mine(current) ? { ...current, phase: 'adding', releaseTitle: candidates[0].title } : current));
       const active = await refreshSession(session);
@@ -1581,7 +1583,7 @@ function App() {
       index -= 1;
       setPlaying((current) => (mine(current) ? { ...current, phase: 'preparing', torrentId: added.id, candidates, candidateIndex: index, startedAt: Date.now(), fileName: candidates[index].title, releaseTitle: candidates[index].title, transferStatus: 'magnet_conversion' } : current));
     } catch (error) {
-      setPlaying((current) => (mine(current) ? { ...current, pending: false, error: friendlyRdError(getError(error)) } : current));
+      setPlaying((current) => (mine(current) ? { ...current, pending: false, error: friendlyRdError(getError(error), triedCount) } : current));
     }
   };
 
