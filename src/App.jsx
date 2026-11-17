@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Icon, PosterCard, ScrollRow, WatchContext } from './ui.jsx';
+import { Icon, PosterCard, PreviewContext, ScrollRow, WatchContext } from './ui.jsx';
+import { AdultPlayer } from './AdultPlayer.jsx';
 import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
 import { EpisodePicker, HistoryPage } from './Watch.jsx';
 import { loadProfiles, pkey, setActiveProfile } from './profiles.js';
@@ -395,6 +396,11 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const [watch, setWatch] = useState(loadWatch);
   const updateWatch = (change) => setWatch((current) => { const next = change(current); saveWatch(next); return next; });
   const watchLookup = (item) => watchInfo(watch, item);
+  const previewResolver = useMemo(() => (window.streamnexus?.isDesktop ? async (item) => {
+    const media = await window.streamnexus.resolveAdultMedia({ embedUrl: item.embedUrl });
+    const small = [...media.qualities].sort((a, b) => a.height - b.height).find((entry) => entry.height >= 240) || media.qualities[media.qualities.length - 1];
+    return small ? { url: small.url, duration: media.duration } : null;
+  } : null), []);
   const toggleEpisodeWatched = (title, season, episode, watched, name) => updateWatch((current) => markWatched(current, title, { season, episode, name }, watched));
   const toggleMovieWatched = (title, watched) => updateWatch((current) => markWatched(current, title, null, watched));
   const forgetTitle = (id) => updateWatch((current) => removeTitle(current, id));
@@ -1747,6 +1753,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
 
   return (
     <WatchContext.Provider value={watchLookup}>
+    <PreviewContext.Provider value={previewResolver}>
     <div className={`app-shell ${mini ? 'has-mini' : ''}`}>
       <aside className="sidebar">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); setActivePage('home'); }} aria-label="StreamNexus, início">
@@ -1808,11 +1815,11 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
             </>}
           </section>
         ) : searchKind ? (
-          <div className="home-page page-in catalog-browse-page search-page"><SearchFeed kind={searchKind} query={query} orientation={searchKind === 'adultvideos' ? adultOrientation : ''} renderCard={(item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} hideSave={searchKind === 'adultvideos'} onOpen={() => (searchKind === 'adultvideos' ? setModal({ type: 'embed', item }) : openDetails(item))} onSave={() => toggleSaved(item.id, item)}/>}/></div>
+          <div className="home-page page-in catalog-browse-page search-page"><SearchFeed kind={searchKind} query={query} orientation={searchKind === 'adultvideos' ? adultOrientation : ''} renderCard={(item, index) => <PosterCard key={item.id} item={item} index={index} saved={saved.includes(item.id)} hideSave={searchKind === 'adultvideos'} onOpen={() => (searchKind === 'adultvideos' ? setModal({ type: 'adultplay', item }) : openDetails(item))} onSave={() => toggleSaved(item.id, item)}/>}/></div>
         ) : activePage === 'tv' && tvMode === 'channels' ? (
           <LiveTvPage externalFilter={query} mode={tvMode} onMode={setTvMode} countries={liveCountries} country={tvCountry} onCountry={changeTvCountry} state={liveChannels} health={liveHealth} showOffline={showOffline} onShowOffline={setShowOffline} onPlay={playLiveChannel} onRetry={() => loadLiveChannels(tvCountry)}/>
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
-          <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'embed', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
+          <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'adultplay', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
             {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
@@ -1894,6 +1901,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
           </div>
         </div>}
 
+        {modal.type === 'adultplay' && modal.item && <AdultPlayer item={modal.item} onClose={() => setModal(null)} onNotify={notify} onFallback={() => setModal({ type: 'embed', item: modal.item })}/>}
         {modal.type === 'embed' && modal.item && <div className="embed-modal modal-card">
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <span className="eyebrow">{modal.item.source?.toUpperCase()} · LEITOR INCORPORADO</span>
@@ -1994,6 +2002,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
         </div>}
       </div>}
     </div>
+    </PreviewContext.Provider>
     </WatchContext.Provider>
   );
 }

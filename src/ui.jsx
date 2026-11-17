@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 
 // Dá aos cartões o estado de visto do perfil atual (função item -> info | null)
 export const WatchContext = createContext(null);
+// Resolve a pré-visualização de um vídeo (item -> { url, duration }); só existe nos vídeos +18
+export const PreviewContext = createContext(null);
 
 export const POSTER_KIND = { 'Álbum': 'music', 'Livro': 'book', 'Canal': 'channel', 'Vídeo': 'clip' };
 
@@ -137,14 +139,31 @@ export function ScrollRow({ className = '', children, ...props }) {
 export function PosterCard({ item, index, saved, onOpen, onSave, rank, hideSave = false, onMissingLogo }) {
   const sources = item.posters?.length ? item.posters : [item.poster];
   const [imageIndex, setImageIndex] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const previewResolver = useContext(PreviewContext);
+  const canPreview = Boolean(previewResolver && item.type === 'Vídeo' && item.embedUrl);
+  const [preview, setPreview] = useState(null);
+  const hoverTimer = useRef(0);
+  const hoverToken = useRef(0);
+  const startHover = () => {
+    if (!canPreview) return;
+    window.clearTimeout(hoverTimer.current);
+    const token = ++hoverToken.current;
+    hoverTimer.current = window.setTimeout(async () => {
+      try { const info = await previewResolver(item); if (token === hoverToken.current && info?.url) setPreview(info); } catch { /* sem pré-visualização */ }
+    }, 700);
+  };
+  const endHover = () => { hoverToken.current += 1; window.clearTimeout(hoverTimer.current); setPreview(null); };
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
   const imageFailed = imageIndex >= sources.length || !sources[imageIndex];
   const watchLookup = useContext(WatchContext);
   const watchState = watchLookup && (item.type === 'Filme' || item.type === 'Série') ? watchLookup(item) : null;
   useEffect(() => { if (imageFailed && onMissingLogo) onMissingLogo(item); }, [imageFailed]);
-  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} ${item.offline ? 'is-offline' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }}>
+  return <article className={`poster-card ${rank ? 'ranked-poster-card' : ''} ${item.offline ? 'is-offline' : ''} poster-${POSTER_KIND[item.type] || 'video'}`} style={{ '--card-delay': `${index * 45}ms`, '--poster-accent': item.accent || '#705d8b' }} onMouseEnter={startHover} onMouseLeave={endHover}>
     {rank && <span className="poster-rank">{rank}</span>}
     <button className="poster-image" onClick={onOpen} aria-label={`Ver detalhes de ${item.title}`}>
-      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img key={sources[imageIndex]} src={sources[imageIndex]} referrerPolicy="no-referrer" alt={`Poster de ${item.title}`} loading="lazy" onError={() => setImageIndex((current) => current + 1)}/>}
+      {imageFailed ? <span className="poster-fallback"><i>{String(item.type).toUpperCase()}</i><strong>{item.title}</strong><small>{item.year}</small></span> : <img key={`${sources[imageIndex]}|${attempt}`} src={sources[imageIndex]} referrerPolicy="no-referrer" alt={`Poster de ${item.title}`} loading="lazy" onError={(event) => { event.currentTarget.classList.add('img-error'); if (attempt < 2) window.setTimeout(() => setAttempt((value) => value + 1), 900 * (attempt + 1)); else { setImageIndex((current) => current + 1); setAttempt(0); } }}/>}
+      {preview && <video className="poster-preview" src={preview.url} muted loop playsInline autoPlay preload="auto" onLoadedMetadata={(event) => { const video = event.currentTarget; const start = video.duration > 40 ? video.duration * 0.3 : 0; video.dataset.start = String(start); if (start) video.currentTime = start; }} onTimeUpdate={(event) => { const video = event.currentTarget; const start = Number(video.dataset.start) || 0; if (video.currentTime - start > 6) video.currentTime = start; }} onError={() => setPreview(null)}/>}
       <span className="poster-shade"></span><span className="poster-hover-play"><Icon name="play" size={17}/></span><span className="poster-type">{item.type}</span>
       {watchState?.kind === 'movie' && watchState.watched && <span className="poster-watched" title="Visto"><Icon name="check" size={12}/>Visto</span>}
       {watchState?.kind === 'series' && watchState.last && <span className="poster-watched poster-episode-chip" title="Último episódio">T{watchState.last.season}·E{watchState.last.episode}</span>}

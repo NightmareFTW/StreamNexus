@@ -926,14 +926,82 @@ async function fetchAdultJson(url) {
   return response.json();
 }
 
-function adultVideoItem(sourceLabel, code, id, title, thumb, duration, views, embedUrl, tags) {
+function adultVideoItem(sourceLabel, code, id, title, thumb, duration, views, embedUrl, tags, alternates = []) {
   const poster = String(thumb || '').replace(/^http:/, 'https:');
+  const posters = [...new Set([poster, ...alternates.map((value) => String(value || '').replace(/^http:/, 'https:'))].filter((value) => /^https:\/\//.test(value)))].slice(0, 4);
   const labels = (tags || []).map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 4);
   return {
     id: `xxx-${code}-${id}`, type: 'Vídeo', title: String(title || 'Sem título').trim(), original: String(title || '').trim(), creator: `${sourceLabel} · ${duration || '—'}`,
-    source: sourceLabel, year: '', rating: '', genre: labels[0] || 'Vídeo', genres: labels, runtime: duration || '', poster, backdrop: poster,
+    source: sourceLabel, year: '', rating: '', genre: labels[0] || 'Vídeo', genres: labels, runtime: duration || '', poster: poster || posters[0] || '', backdrop: poster || posters[0] || '', posters,
     description: `${duration || ''} · ${Number(views || 0).toLocaleString('pt-PT')} visualizações · ${sourceLabel}`, embedUrl, accent: '#b30d1b',
   };
+}
+
+// ---- Vídeos adultos: qualidades (MP4) lidas das páginas de incorporação de cada fonte ----
+const ADULT_EMBED_HOSTS = ['embed.redtube.com', 'www.pornhub.com', 'www.eporner.com'];
+const ADULT_MEDIA_HOST = /(^|\.)(rdtcdn\.com|phncdn\.com|eporner\.com)$/i;
+
+// Lê um array JSON `"chave": [ ... ]` de uma página, respeitando parênteses retos dentro de strings
+function grabJsonArray(html, key) {
+  const at = html.indexOf(`"${key}"`);
+  if (at < 0) return [];
+  const start = html.indexOf('[', at);
+  if (start < 0) return [];
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < html.length; index += 1) {
+    const char = html[index];
+    if (inString) { if (char === '\\') index += 1; else if (char === '"') inString = false; }
+    else if (char === '"') inString = true;
+    else if (char === '[') depth += 1;
+    else if (char === ']') { depth -= 1; if (depth === 0) { try { return JSON.parse(html.slice(start, index + 1)); } catch { return []; } } }
+  }
+  return [];
+}
+
+async function adultGet(url, referer, headers = {}) {
+  const response = await fetch(url, { headers: { 'User-Agent': ADULT_UA, Accept: '*/*', ...(referer ? { Referer: referer } : {}), ...headers }, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`A fonte respondeu com erro ${response.status}.`);
+  return response;
+}
+
+async function resolveAdultMedia({ embedUrl } = {}) {
+  let url;
+  try { url = new URL(String(embedUrl || '')); } catch { throw new Error('Endereço do vídeo inválido.'); }
+  if (url.protocol !== 'https:' || !ADULT_EMBED_HOSTS.includes(url.hostname)) throw new Error('Fonte de vídeo não suportada.');
+  return memo(`adultmedia|${url}`, async () => {
+    let entries = [];
+    let duration = 0;
+    if (url.hostname === 'embed.redtube.com') {
+      const html = await (await adultGet(url, 'https://www.redtube.com/')).text();
+      const defs = [...grabJsonArray(html, 'mediaDefinitions'), ...grabJsonArray(html, 'mediaDefinition')];
+      const mp4 = defs.find((entry) => entry.format === 'mp4' && entry.videoUrl);
+      if (mp4) entries = await (await adultGet(new URL(mp4.videoUrl, url), url.toString())).json();
+    } else if (url.hostname === 'www.pornhub.com') {
+      const html = await (await adultGet(url, 'https://www.pornhub.com/')).text();
+      const mp4 = grabJsonArray(html, 'mediaDefinitions').find((entry) => entry.format === 'mp4' && entry.videoUrl);
+      if (mp4) entries = await (await adultGet(new URL(mp4.videoUrl, url), url.toString())).json();
+    } else {
+      const html = await (await adultGet(url, 'https://www.eporner.com/')).text();
+      const hash = /hash\s*[:=]\s*["']([\da-f]{32})["']/.exec(html)?.[1];
+      const videoId = /\/embed\/([A-Za-z0-9]+)/.exec(url.pathname)?.[1];
+      if (hash && videoId) {
+        const encoded = [0, 8, 16, 24].map((offset) => parseInt(hash.slice(offset, offset + 8), 16).toString(36)).join('');
+        const data = await (await adultGet(`https://www.eporner.com/xhr/video/${videoId}?hash=${encoded}&domain=www.eporner.com&fallback=false&embed=true&supportedFormats=dash,mp4&_=${Date.now()}`, url.toString(), { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' })).json();
+        duration = Number(data.duration) || 0;
+        entries = Object.entries(data.sources?.mp4 || {}).map(([label, value]) => ({ quality: label, videoUrl: value?.src }));
+      }
+    }
+    const seen = new Set();
+    const qualities = (Array.isArray(entries) ? entries : [])
+      .map((entry) => ({ height: parseInt(String(entry.quality || '').match(/\d{3,4}/)?.[0], 10), url: String(entry.videoUrl || entry.url || '') }))
+      .filter((entry) => entry.height > 0 && /^https:\/\//.test(entry.url) && (() => { try { return ADULT_MEDIA_HOST.test(new URL(entry.url).hostname); } catch { return false; } })())
+      .filter((entry) => !seen.has(entry.height) && seen.add(entry.height))
+      .sort((a, b) => b.height - a.height)
+      .map((entry) => ({ ...entry, label: `${entry.height}p` }));
+    if (!qualities.length) throw new Error('Não encontrei qualidades de vídeo para este título.');
+    return { qualities, duration };
+  }, 15 * 60 * 1000);
 }
 
 const ADULT_ORIENTATIONS = {
@@ -969,8 +1037,8 @@ async function fetchRedtubeVideos({ ordering, period }, term, orientation, page 
   const category = ADULT_ORIENTATIONS[orientation]?.rt;
   const params = new URLSearchParams({ data: 'redtube.Videos.searchVideos', output: 'json', thumbsize: 'big', page: String(page), ordering, ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   const data = await fetchAdultJson(`https://api.redtube.com/?${params}`);
-  const items = (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, '', video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name)));
-  await mapLimit(items, 8, async (item) => { const url = await redtubeRealThumb(item.id.slice('xxx-rt-'.length)); item.poster = url; item.backdrop = url; });
+  const items = (data.videos || []).map(({ video }) => adultVideoItem('RedTube', 'rt', video.video_id, video.title, '', video.duration, video.views, `https://embed.redtube.com/?id=${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name), (video.thumbs || []).map((thumb) => thumb.src)));
+  await mapLimit(items, 8, async (item) => { const url = await redtubeRealThumb(item.id.slice('xxx-rt-'.length)); if (url) { item.poster = url; item.backdrop = url; item.posters = [url, ...item.posters.filter((entry) => entry !== url)].slice(0, 4); } });
   return items.filter((item) => item.poster);
 }
 
@@ -979,7 +1047,7 @@ async function fetchPornhubVideos({ ordering, period }, term, orientation, page 
   const params = new URLSearchParams({ ordering, thumbsize: 'large', page: String(page), ...(period ? { period } : {}), ...(term ? { search: term } : {}), ...(category ? { category } : {}) });
   let data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`);
   if (!data.videos?.length && period) { params.delete('period'); data = await fetchAdultJson(`https://www.pornhub.com/webmasters/search?${params}`); }
-  return (data.videos || []).filter((video) => orientation !== 'straight' || video.segment !== 'gay').map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name))).filter((item) => item.poster);
+  return (data.videos || []).filter((video) => orientation !== 'straight' || video.segment !== 'gay').map((video) => adultVideoItem('Pornhub', 'ph', video.video_id, video.title, video.default_thumb || video.thumb, video.duration, video.views, `https://www.pornhub.com/embed/${encodeURIComponent(video.video_id)}`, (video.tags || []).map((tag) => tag.tag_name), [video.thumb, ...(video.thumbs || []).map((thumb) => thumb.src)])).filter((item) => item.poster);
 }
 
 async function fetchEpornerVideos(order, term, orientation, page = 1) {
@@ -987,7 +1055,7 @@ async function fetchEpornerVideos(order, term, orientation, page = 1) {
   const query = [config.epTerm, term].filter(Boolean).join(' ') || 'all';
   const params = new URLSearchParams({ query, per_page: '30', page: String(page), thumbsize: 'big', order, gay: config.ep || '0', lq: '0', format: 'json' });
   const data = await fetchAdultJson(`https://www.eporner.com/api/v2/video/search/?${params}`);
-  return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()))).filter((item) => item.poster && item.embedUrl);
+  return (data.videos || []).map((video) => adultVideoItem('Eporner', 'ep', video.id, video.title, video.default_thumb?.src, video.length_min, video.views, video.embed, String(video.keywords || '').split(',').map((word) => word.trim()), (video.thumbs || []).map((thumb) => thumb.src))).filter((item) => item.poster && item.embedUrl);
 }
 
 const adultKey = (title) => String(title || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -2302,7 +2370,7 @@ function configureContentSecurityPolicy() {
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['*://*.rdtcdn.com/*', '*://*.phncdn.com/*', '*://*.eporner.com/*'] }, (details, callback) => {
     let host = '';
     try { host = new URL(details.url).hostname.toLowerCase(); } catch { host = ''; }
-    const entry = details.resourceType === 'image' ? thumbReferers.find(([domain]) => host === domain || host.endsWith(`.${domain}`)) : null;
+    const entry = ['image', 'media'].includes(details.resourceType) ? thumbReferers.find(([domain]) => host === domain || host.endsWith(`.${domain}`)) : null;
     callback({ requestHeaders: entry ? { ...details.requestHeaders, Referer: entry[1] } : details.requestHeaders });
   });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -2340,6 +2408,7 @@ function registerIpc() {
   ipcMain.handle('feed:shelves', resultHandler(feedShelves));
   ipcMain.handle('feed:category', resultHandler(feedCategory));
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
+  ipcMain.handle('adult:media', resultHandler(resolveAdultMedia));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
   ipcMain.handle('tv:health', resultHandler(fetchLiveHealth));
