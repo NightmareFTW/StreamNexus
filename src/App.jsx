@@ -339,6 +339,15 @@ function shiftVtt(vtt, offsetSeconds) {
 
 const fmtClock = (seconds) => { const total = Math.max(0, Math.round(Number(seconds) || 0)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const sec = total % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
 
+// Início da primeira fala de uma legenda WebVTT, em segundos.
+function vttFirstStart(vtt) {
+  const match = String(vtt || '').match(/((?:\d+:)?\d{2}:\d{2})\.(\d{3}) -->/);
+  if (!match) return 0;
+  const parts = match[1].split(':').map(Number);
+  const [h, m, sec] = parts.length === 3 ? parts : [0, parts[0], parts[1]];
+  return h * 3600 + m * 60 + sec + Number(match[2]) / 1000;
+}
+
 function getError(error) {
   if (error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')) return 'Não foi possível ligar à API. Verifica a ligação à internet.';
   return error?.message || 'Ocorreu um erro inesperado.';
@@ -389,6 +398,15 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [subtitleInfo, setSubtitleInfo] = useState(null);
   const [subtitleLine, setSubtitleLine] = useState('');
+  const nudgeSubtitle = (seconds) => setSubtitleDelay((value) => Math.round((value + seconds) * 10) / 10);
+  // "A primeira fala é agora": põe a primeira fala da legenda no instante em que o vídeo está.
+  const alignSubtitleHere = () => {
+    const raw = subtitleVtt.current.get(subtitleTrackUrl);
+    const video = playerVideoRef.current;
+    if (!raw || !video) return;
+    const absolute = (playing?.offset || 0) + (video.currentTime || 0);
+    setSubtitleDelay(Math.round((absolute - vttFirstStart(raw)) * 10) / 10);
+  };
   const [subtitleShownUrl, setSubtitleShownUrl] = useState('');
   const [downloadedSubs, setDownloadedSubs] = useState([]);
   const [activeSubId, setActiveSubId] = useState('');
@@ -2211,7 +2229,14 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
               {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda transferida e ativa no vídeo.</p>}
               {subtitleStatus === 'selected' && <div className="subtitle-diag">
                 <small>{!subtitleInfo ? 'A ler a legenda…' : subtitleInfo.missing ? 'O leitor não criou a faixa das legendas.' : subtitleInfo.cues === null ? `Faixa criada (modo: ${subtitleInfo.mode}), o ficheiro ainda não foi lido.` : subtitleInfo.cues === 0 ? `A legenda foi lida, mas não tem falas (modo: ${subtitleInfo.mode}).` : `${subtitleInfo.cues} falas · de ${fmtClock(subtitleInfo.first)} a ${fmtClock(subtitleInfo.last)} · vídeo a ${fmtClock(subtitleInfo.now)} de ${fmtClock((playing?.totalDuration || playerVideoRef.current?.duration || 0))} · ${subtitleInfo.active ? `fala agora: “${String(subtitleInfo.active).slice(0, 60)}”` : 'sem fala neste momento'}`}</small>
-                <span className="subtitle-delay"><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value - 0.5) * 10) / 10)}>−0,5 s</button><em>{subtitleDelay > 0 ? '+' : ''}{String(subtitleDelay).replace('.', ',')} s</em><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value + 0.5) * 10) / 10)}>+0,5 s</button></span>
+                <span className="subtitle-delay">
+                  <button className="button button-quiet button-sm" onClick={() => nudgeSubtitle(-5)}>−5 s</button>
+                  <button className="button button-quiet button-sm" onClick={() => nudgeSubtitle(-0.5)}>−0,5 s</button>
+                  <em>{subtitleDelay > 0 ? '+' : ''}{String(subtitleDelay).replace('.', ',')} s</em>
+                  <button className="button button-quiet button-sm" onClick={() => nudgeSubtitle(0.5)}>+0,5 s</button>
+                  <button className="button button-quiet button-sm" onClick={() => nudgeSubtitle(5)}>+5 s</button>
+                </span>
+                <span className="subtitle-align"><button className="button button-quiet button-sm" onClick={alignSubtitleHere}>A 1.ª fala é agora</button><small>Põe o vídeo no momento em que a primeira fala se ouve e carrega aqui.</small></span>
               </div>}
               {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
               {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
