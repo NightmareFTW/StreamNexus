@@ -90,11 +90,6 @@ async function writeStoredSession(value) {
   if (!value.access_token || !value.client_id || !value.client_secret || !value.refresh_token) {
     throw new Error('A sessão Real-Debrid está incompleta.');
   }
-  if (settings.shelfarrUrl) {
-    let url;
-    try { url = new URL(settings.shelfarrUrl); } catch { throw new Error('O endereço do Shelfarr não é válido.'); }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Shelfarr.');
-  }
   if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
   const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(value));
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -135,6 +130,11 @@ async function writeIntegrations(value) {
     let url;
     try { url = new URL(settings.prowlarrUrl); } catch { throw new Error('O endereço do Prowlarr não é válido.'); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Prowlarr.');
+  }
+  if (settings.shelfarrUrl) {
+    let url;
+    try { url = new URL(settings.shelfarrUrl); } catch { throw new Error('O endereço do Shelfarr não é válido.'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Shelfarr.');
   }
   if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
   const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(settings));
