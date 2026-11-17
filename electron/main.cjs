@@ -1655,7 +1655,10 @@ async function musicSearchPage(query, cursor) {
 
 async function bookSearchPage(query, cursor) {
   const offset = Math.max(0, Number(cursor) || 0);
-  const data = await memo(`books-s|${query}|${offset}`, () => fetchPublicJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&fields=key,title,author_name,cover_i,first_publish_year&limit=30&offset=${offset}`), 5 * 60 * 1000);
+  // A Open Library recusa pesquisas com menos de 3 caracteres (erro 422); entre aspas aceita-as.
+  const term = String(query).trim();
+  const searchText = term.length < 3 ? `"${term.replace(/"/g, '')}"` : term;
+  const data = await memo(`books-s|${query}|${offset}`, () => fetchPublicJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(searchText)}&fields=key,title,author_name,cover_i,first_publish_year&limit=30&offset=${offset}`), 5 * 60 * 1000);
   const docs = data.docs || [];
   const items = docs.filter((work) => work.title && work.key).map((work, index) => normalizeBook(work, { genre: 'Livros' }, index));
   return { items, cursor: offset + 30, hasMore: docs.length > 0 && offset + docs.length < (data.numFound || 0) && offset < 1000 };
