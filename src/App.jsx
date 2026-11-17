@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Icon, PosterCard, PreviewContext, ScrollRow, WatchContext } from './ui.jsx';
+import { BrandFlow, Icon, PosterCard, PreviewContext, ScrollRow, WatchContext } from './ui.jsx';
 import { AdultPlayer } from './AdultPlayer.jsx';
 import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
 import { EpisodePicker, HistoryPage } from './Watch.jsx';
 import { HomePage } from './Home.jsx';
+import { UpdateBanner, UpdateSettings } from './Update.jsx';
+import { startAutoCheck } from './updateStore.js';
+import { kidsAllowed } from './kids.js';
 import { loadProfiles, pkey, setActiveProfile } from './profiles.js';
 import { epLabel, loadWatch, markWatched, removeTitle, resumePointFor, saveWatch, watchInfo, withProgress } from './watch.js';
 import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 import { FreeMusicPanel, SpotifyConnectBox } from './Music.jsx';
 import { MiniPlayer } from './MiniPlayer.jsx';
-import { FeedShelves, SearchFeed } from './Feed.jsx';
+import { FeedShelves, SearchFeed, setFeedFilter } from './Feed.jsx';
 import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
@@ -322,7 +325,11 @@ function getError(error) {
   return error?.message || 'Ocorreu um erro inesperado.';
 }
 
-function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
+function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
+  const kids = Boolean(profile.kids);
+  useEffect(() => { startAutoCheck(); }, []);
+  setFeedFilter(kids ? kidsAllowed : null);
+  const applyKids = (items) => (kids ? (items || []).filter(kidsAllowed) : items);
   const [activePage, setActivePage] = useState('home');
   const [query, setQuery] = useState('');
   const [genre, setGenre] = useState('Todos');
@@ -345,7 +352,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
   const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info' });
   const setIntegrationTest = useCallback((text, kind = 'info') => setIntegrationTestState({ text, kind }), []);
-  const [catalogTitles, setCatalogTitles] = useState(titles);
+  const [catalogTitles, setCatalogTitles] = useState(() => (profile.kids ? titles.filter(kidsAllowed) : titles));
   const [catalogRows, setCatalogRows] = useState(null);
   const [catalogStatus, setCatalogStatus] = useState('sample');
   const [catalogUpdated, setCatalogUpdated] = useState('');
@@ -380,6 +387,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playerPlaybackError, setPlayerPlaybackError] = useState('');
   const [adultEnabled, setAdultEnabled] = useState(() => {
+    if (profile.kids) return false;
     try { return localStorage.getItem(pkey('streamnexus.settings.adult')) === 'true'; } catch { return false; }
   });
   const [searchCategory, setSearchCategory] = useState('movies');
@@ -394,6 +402,9 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
     try { return JSON.parse(localStorage.getItem(pkey('streamnexus.watchlist')) || '[]'); } catch { return []; }
   });
   const [playing, setPlaying] = useState(null);
+  const [prefs, setPrefs] = useState(() => { try { return { autoNext: true, notifyPremieres: true, ...JSON.parse(localStorage.getItem(pkey('streamnexus.prefs')) || '{}') }; } catch { return { autoNext: true, notifyPremieres: true }; } });
+  const changePrefs = (patch) => setPrefs((current) => { const next = { ...current, ...patch }; try { localStorage.setItem(pkey('streamnexus.prefs'), JSON.stringify(next)); } catch { /* só nesta sessão */ } return next; });
+  const [nextCountdown, setNextCountdown] = useState(null);
   const [watch, setWatch] = useState(loadWatch);
   const updateWatch = (change) => setWatch((current) => { const next = change(current); saveWatch(next); return next; });
   const watchLookup = (item) => watchInfo(watch, item);
@@ -463,8 +474,8 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
     try {
       if (!window.streamnexus?.isDesktop) throw new Error('A atualização do catálogo está disponível na app desktop.');
       const data = await window.streamnexus.fetchCatalog();
-      setCatalogTitles(data.titles?.length ? data.titles : titles);
-      setCatalogRows(data.rows || null);
+      setCatalogTitles(applyKids(data.titles?.length ? data.titles : titles));
+      setCatalogRows(data.rows ? Object.fromEntries(Object.entries(data.rows).map(([key, list]) => [key, applyKids(list)])) : null);
       setHeroIndex(0);
       setCatalogUpdated(new Intl.DateTimeFormat('pt-PT', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date()));
       setCatalogStatus('ready');
@@ -508,7 +519,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const discoveryState = discovery[activePage];
   const catalogIdSet = new Set(catalogTitles.map((item) => item.id));
   const discoveryShelves = discoveryPage ? (discoveryState?.rows || []).map((row) => (activePage === 'adult' ? { ...row, items: row.items.filter((item) => !catalogIdSet.has(item.id)) } : row)) : [];
-  const discoveryItems = [...new Map(discoveryShelves.flatMap((row) => row.items).filter((item) => item.poster).map((item) => [item.id, item])).values()];
+  const discoveryItems = [...new Map(discoveryShelves.flatMap((row) => applyKids(row.items)).filter((item) => item.poster).map((item) => [item.id, item])).values()];
 
   const featuredTitles = discoveryPage ? discoveryItems.slice(0, 10) : activePage === 'films'
     ? (catalogRows?.popularMovies?.length ? catalogRows.popularMovies : catalogTitles.filter((item) => item.type === 'Filme'))
@@ -556,6 +567,13 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   }, [playing?.url, subtitleTrackUrl]);
 
   const isPlayerOpen = modal?.type === 'player';
+  useEffect(() => { setNextCountdown(playing?.nextEpisode && prefs.autoNext ? 10 : null); }, [playing?.nextEpisode?.season, playing?.nextEpisode?.episode, prefs.autoNext]);
+  useEffect(() => {
+    if (nextCountdown === null) return undefined;
+    if (nextCountdown <= 0) { setNextCountdown(null); if (playing?.nextEpisode) startPlayback(playing.metadata, { episode: playing.nextEpisode, resumeAt: 0 }); return undefined; }
+    const timer = window.setTimeout(() => setNextCountdown((value) => (value === null ? null : value - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [nextCountdown]);
   const revealPlayerControls = useCallback(() => {
     setPlayerControlsVisible(true);
     window.clearTimeout(playerControlsTimerRef.current);
@@ -1357,6 +1375,8 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const [musicSources, setMusicSources] = useState({ id: '', status: 'idle', data: null });
   const [mini, setMini] = useState(null);
   const [spotifyNow, setSpotifyNow] = useState('');
+  const [lastMusic, setLastMusic] = useState(() => { try { return JSON.parse(localStorage.getItem(pkey('streamnexus.music.last')) || 'null'); } catch { return null; } });
+  const saveLastMusic = (entry) => { setLastMusic(entry); try { localStorage.setItem(pkey('streamnexus.music.last'), JSON.stringify(entry)); } catch { /* só nesta sessão */ } };
   const [taste, setTaste] = useState(() => { try { return JSON.parse(localStorage.getItem(pkey('streamnexus.taste')) || '{}') || {}; } catch { return {}; } });
   const changeTaste = (next) => { setTaste(next); try { localStorage.setItem(pkey('streamnexus.taste'), JSON.stringify(next)); } catch { /* só nesta sessão */ } };
   const [musicHistory, setMusicHistory] = useState(() => { try { const list = JSON.parse(localStorage.getItem(pkey('streamnexus.music.history')) || '[]'); return Array.isArray(list) ? list : []; } catch { return []; } });
@@ -1366,13 +1386,23 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
     try { localStorage.setItem(pkey('streamnexus.music.history'), JSON.stringify(next)); } catch { /* só nesta sessão */ }
     return next;
   });
-  const playTracks = (queue, index, album) => { recordMusic(album); setMini({ mode: 'tracks', key: `${album.id}-${Date.now()}`, tracks: queue, index, title: album.title, cover: album.poster }); };
+  const playTracks = (queue, index, album) => { recordMusic(album); setMini({ mode: 'tracks', key: `${album.id}-${Date.now()}`, tracks: queue, index, title: album.title, cover: album.poster, startAt: 0, albumMeta: { id: album.id, title: album.title, creator: album.creator || '', poster: album.poster || '', genre: album.genre || '' } }); };
   const listenOnSpotify = async (album, options = {}) => {
     try {
       await window.streamnexus.spotifyConnectCommand({ action: 'play', uri: options.albumUri || album.spotifyUri || '', trackUri: options.trackUri || '', shuffle: options.shuffle, repeat: options.repeat, artist: (album.creator || '').split(',')[0], album: String(album.title || '').replace(/\s*[(\[].*$/, '') });
       recordMusic(album);
+      saveLastMusic({ mode: 'spotify', album: { id: album.id, title: album.title, creator: album.creator || '', poster: album.poster || '', genre: album.genre || '' }, uri: options.albumUri || album.spotifyUri || '', trackUri: options.trackUri || '', at: Date.now() });
       setMini({ mode: 'spotify', key: `${album.id}-${Date.now()}`, title: album.title, cover: album.poster });
     } catch (error) { notify(getError(error), 'error'); }
+  };
+  const rememberMusic = (index, position) => {
+    if (!mini || mini.mode !== 'tracks' || !mini.albumMeta || !mini.tracks?.length) return;
+    saveLastMusic({ mode: 'tracks', album: mini.albumMeta, tracks: mini.tracks.map(({ title, url, duration, source }) => ({ title, url, duration, source })), index, position: Math.floor(position), at: Date.now() });
+  };
+  const resumeMusic = () => {
+    if (!lastMusic) return;
+    if (lastMusic.mode === 'tracks') { recordMusic(lastMusic.album); setMini({ mode: 'tracks', key: `${lastMusic.album.id}-${Date.now()}`, tracks: lastMusic.tracks, index: lastMusic.index, title: lastMusic.album.title, cover: lastMusic.album.poster, albumMeta: lastMusic.album, startAt: lastMusic.position || 0 }); }
+    else listenOnSpotify(lastMusic.album, { albumUri: lastMusic.uri, trackUri: lastMusic.trackUri });
   };
   const showDiscover = activePage !== 'books' || booksView === 'discover';
   const [reading, setReading] = useState(loadReading);
@@ -1478,6 +1508,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
   const genreTitles = discoveryPage ? discoveryItems : activePage === 'films' ? catalogTitles.filter((item) => item.type === 'Filme') : catalogTitles.filter((item) => item.type === 'Série');
   const browseGenres = [...new Set([...(STATIC_GENRES[activePage] || []), ...genreTitles.flatMap((item) => item.genres?.length ? item.genres : [item.genre]).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'pt-PT'));
   const readyTorrents = rdItems.filter((item) => item.status === 'downloaded');
+  useEffect(() => { if (activePage === 'home' && session?.access_token && !rdUser) loadRdAccount(); }, [activePage, session?.access_token]);
   const browsingShelves = discoveryPage
     ? makeDistinctShelves(discoveryShelves.map((row) => ({ ...row, page: activePage })), [featuredTitle.id])
     : activePage === 'films'
@@ -1769,7 +1800,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
       <aside className="sidebar">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); setActivePage('home'); }} aria-label="StreamNexus, início">
           <span className="brand-mark"><span></span><span></span></span>
-          <span className="brand-word">stream<span>nexus</span><small>O teu próximo favorito</small></span>
+          <span className="brand-word">stream<BrandFlow/><span>nexus</span><small>O teu próximo favorito</small></span>
         </a>
 
         <form className="sidebar-search" role="search" onSubmit={(event) => event.preventDefault()}>
@@ -1778,7 +1809,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
         </form>
         <div className="side-section">
           <nav className="side-nav" aria-label="Navegação principal">
-            {nav.map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
+            {nav.filter((item) => !kids || !['adult', 'tv', 'indexers'].includes(item.id)).map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
           </nav>
         </div>
         <div className="profile-menu-wrap header-profile" ref={profileMenuRef}>
@@ -1789,13 +1820,14 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
           {profileMenuOpen && <div className="profile-menu" role="menu">
             <div className="profile-menu-identity"><ProfileAvatar profile={profile} size={36}/><span><strong>{profile.name}</strong><small>{session?.access_token ? (rdUser?.type === 'premium' ? `Real-Debrid Premium${rdUser?.username ? ` · ${rdUser.username}` : ''}` : 'Real-Debrid ligado') : 'Conta local'}</small></span></div>
             <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onSwitchProfile(); }}><Icon name="user" size={16}/>Mudar de perfil</button>
-            <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onManageProfiles(); }}><Icon name="settings" size={16}/>Gerir perfis</button>
+            {!kids && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onManageProfiles(); }}><Icon name="settings" size={16}/>Gerir perfis</button>}
+            <button role="menuitem" onClick={() => { setProfileMenuOpen(false); setModal({ type: 'prefs' }); }}><Icon name="settings" size={16}/>Preferências do perfil</button>
             <div className="profile-menu-divider"></div>
             <button role="menuitem" onClick={() => { setActivePage('history'); setQuery(''); setProfileMenuOpen(false); }}><Icon name="history" size={16}/>Vistos e a continuar</button>
             <button role="menuitem" onClick={() => { setActivePage('watchlist'); setProfileMenuOpen(false); }}><Icon name="bookmark" size={16}/>A minha lista{saved.length > 0 && <small>{saved.length}</small>}</button>
             <button role="menuitem" onClick={() => { setActivePage('downloads'); setProfileMenuOpen(false); loadRdAccount(); }}><Icon name="cloud" size={16}/>Real-Debrid{session?.access_token && <small>{readyTorrents.length} prontos</small>}</button>
             <div className="profile-menu-divider"></div>
-            <button role="menuitem" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setProfileMenuOpen(false); setModal({ type: 'integrations' }); }}><Icon name="settings" size={16}/>Definições e integrações</button>
+            {!kids && <button role="menuitem" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setProfileMenuOpen(false); setModal({ type: 'integrations' }); }}><Icon name="settings" size={16}/>Definições e integrações</button>}
           </div>}
         </div>
       </aside>
@@ -1832,7 +1864,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
           <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'adultplay', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
         ) : activePage === 'home' && !query ? (
-          <HomePage profile={profile} watch={watch} saved={saved} savedItems={savedItems} reading={reading} trending={(catalogRows?.trending?.length ? catalogRows.trending : catalogTitles).filter((item) => item.poster && !item.adult)} taste={taste} onTaste={changeTaste} musicHistory={musicHistory} onOpen={(item) => openDetails(item)} onResume={(entry) => startPlayback(entry)} onPlayEpisode={(title, context) => startPlayback(title, context)} onToggleSave={toggleSaved} onNavigate={(page) => { setActivePage(page); setQuery(''); setGenre('Todos'); }}/>
+          <HomePage profile={profile} profiles={profiles} kids={kids} prefs={prefs} rdStatus={{ connected: Boolean(session?.access_token), user: rdUser, count: rdItems.length, ready: readyTorrents.length }} onConnectRd={() => setModal({ type: 'connect' })} lastMusic={lastMusic} onResumeMusic={resumeMusic} watch={watch} saved={saved} savedItems={savedItems} reading={reading} trending={(catalogRows?.trending?.length ? catalogRows.trending : catalogTitles).filter((item) => item.poster && !item.adult)} taste={taste} onTaste={changeTaste} musicHistory={musicHistory} onOpen={(item) => openDetails(item)} onResume={(entry) => startPlayback(entry)} onPlayEpisode={(title, context) => startPlayback(title, context)} onToggleSave={toggleSaved} onNavigate={(page) => { setActivePage(page); setQuery(''); setGenre('Todos'); }}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
             {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
@@ -1883,7 +1915,8 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
 
       <div className={`catalog-status status-bar ${catalogStatus === 'error' ? 'is-error' : ''}`}><span>{catalogStatus === 'loading' ? 'A atualizar tendências e estreias…' : catalogStatus === 'ready' ? `Catálogo atualizado em ${catalogUpdated}.` : catalogStatus === 'error' ? 'Falha ao atualizar. A mostrar o último catálogo disponível.' : 'Catálogo de demonstração. Liga o TMDB para ver títulos e tendências atualizados.'}</span><button className="text-link" onClick={() => integrationSettings.tmdbApiKey ? refreshCatalog() : setModal({ type: 'integrations' })} disabled={catalogStatus === 'loading'}>{integrationSettings.tmdbApiKey ? 'Atualizar' : 'Configurar TMDB'} <Icon name="chevron" size={14}/></button></div>
 
-      {mini && <MiniPlayer key={mini.key} mini={mini} suspended={isPlayerOpen} hidden={activePage === 'home' && !query} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')} onRemote={(state) => setSpotifyNow(state?.uri || '')}/>}
+      {mini && <MiniPlayer key={mini.key} mini={mini} onProgress={rememberMusic} suspended={isPlayerOpen} hidden={activePage === 'home' && !query} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')} onRemote={(state) => setSpotifyNow(state?.uri || '')}/>}
+      <UpdateBanner onNotify={notify}/>
       {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); setActiveSubId(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
@@ -1923,9 +1956,20 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
           <small className="embed-note">{modal.item.embedHeight ? <>Pré-visualização de cerca de 30 s por faixa. Para ouvir completo, abre no {modal.item.source}. {modal.item.linkUrl && <button className="text-link" onClick={() => window.streamnexus?.openLink?.(modal.item.linkUrl)?.catch((error) => notify(getError(error), 'error'))}>Abrir no {modal.item.source}</button>}</> : <>Vídeo reproduzido a partir de {modal.item.source}. A StreamNexus não aloja nem descarrega este conteúdo.</>}</small>
         </div>}
 
+        {modal.type === 'prefs' && <div className="connect-modal modal-card prefs-modal">
+          <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
+          <span className="eyebrow">PREFERÊNCIAS · {profile.name.toUpperCase()}</span>
+          <h2>Preferências do perfil</h2>
+          <div className="prefs-list">
+            <label className="prefs-row"><input type="checkbox" checked={prefs.autoNext} onChange={(event) => changePrefs({ autoNext: event.target.checked })}/><span><strong>Reproduzir o episódio seguinte automaticamente</strong><small>Quando um episódio acaba, o próximo começa ao fim de 10 segundos (podes cancelar).</small></span></label>
+            <label className="prefs-row"><input type="checkbox" checked={prefs.notifyPremieres} onChange={(event) => changePrefs({ notifyPremieres: event.target.checked })}/><span><strong>Avisar quando estreia um episódio</strong><small>Mostra uma notificação do Windows, ao abrir a app, quando sai um episódio de uma série que acompanhas.</small></span></label>
+          </div>
+          <small className="prefs-note">{profile.kids ? 'Este é um perfil infantil: só mostra conteúdo para os mais novos.' : 'Para criar um perfil infantil, usa “Gerir perfis”.'}</small>
+        </div>}
         {modal.type === 'integrations' && <div className="integration-modal modal-card">
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <div className="modal-emblem magnet-emblem"><Icon name="settings" size={23}/></div><span className="eyebrow">CATÁLOGO, PESQUISA E LEGENDAS</span><h2>Integrações</h2>
+          <UpdateSettings onNotify={notify}/>
           <p className="connect-lead">Liga o Prowlarr para pesquisar fontes, o TMDB para atualizar tendências e estreias, e o OpenSubtitles para procurar legendas. A preferência de legendas é português de Portugal.</p>
           <form onSubmit={saveIntegrationSettings} className="integration-form">
             <div className="integration-group-title">Prowlarr</div>
@@ -1979,7 +2023,7 @@ function AppShell({ profile, onSwitchProfile, onManageProfiles }) {
           <div className="player-frame">
             {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleTrackUrl && <track key={subtitleTrackUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleTrackUrl} default/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
-            {playing?.nextEpisode && <div className="next-episode-card"><span className="eyebrow">A SEGUIR</span><strong>{epLabel(playing.nextEpisode.season, playing.nextEpisode.episode)}{playing.nextEpisode.name ? ` · ${playing.nextEpisode.name}` : ''}</strong><div><button className="button button-primary button-sm" onClick={() => startPlayback(playing.metadata, { episode: playing.nextEpisode, resumeAt: 0 })}><Icon name="play" size={14}/>Reproduzir</button><button className="button button-quiet button-sm" onClick={() => setPlaying((current) => (current ? { ...current, nextEpisode: null } : current))}>Agora não</button></div></div>}
+            {playing?.nextEpisode && <div className="next-episode-card"><span className="eyebrow">A SEGUIR</span><strong>{epLabel(playing.nextEpisode.season, playing.nextEpisode.episode)}{playing.nextEpisode.name ? ` · ${playing.nextEpisode.name}` : ''}</strong>{nextCountdown !== null && <small className="next-episode-count">A reproduzir automaticamente em {Math.max(0, nextCountdown)} s</small>}<div><button className="button button-primary button-sm" onClick={() => startPlayback(playing.metadata, { episode: playing.nextEpisode, resumeAt: 0 })}><Icon name="play" size={14}/>Reproduzir</button><button className="button button-quiet button-sm" onClick={() => setPlaying((current) => (current ? { ...current, nextEpisode: null } : current))}>Agora não</button></div></div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
             {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? `A enviar para o Real-Debrid${playing.attempt > 1 ? ` (versão ${playing.attempt} de ${playing.attemptTotal})` : ''}…` : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
@@ -2093,5 +2137,5 @@ export default function App() {
   }
   setActiveProfile(activeId);
   const profile = profiles.find((entry) => entry.id === activeId) || profiles[0];
-  return <AppShell key={profile.id} profile={profile} onSwitchProfile={() => { setPreviousId(profile.id); setManaging(false); setActiveId(null); }} onManageProfiles={() => { setPreviousId(profile.id); setManaging(true); setActiveId(null); }}/>;
+  return <AppShell key={profile.id} profile={profile} profiles={profiles} onSwitchProfile={() => { setPreviousId(profile.id); setManaging(false); setActiveId(null); }} onManageProfiles={() => { setPreviousId(profile.id); setManaging(true); setActiveId(null); }}/>;
 }

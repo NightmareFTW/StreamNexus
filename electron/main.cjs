@@ -2,7 +2,9 @@ const { app, BrowserWindow, ipcMain, safeStorage, session, shell, components } =
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { randomUUID } = require('node:crypto');
+const fsSync = require('node:fs');
+const { randomUUID, createHash } = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
 const dns = require('node:dns/promises');
 const net = require('node:net');
 const http = require('node:http');
@@ -2247,13 +2249,44 @@ const HOME_GENRES = {
   tv: { 'Ação': 10759, 'Ação e aventura': 10759, 'Aventura': 10759, 'Animação': 16, 'Comédia': 35, 'Crime': 80, 'Documentário': 99, 'Drama': 18, 'Família': 10751, 'Infantil': 10762, 'Mistério': 9648, 'Thriller': 9648, 'Terror': 9648, 'Reality': 10764, 'Ficção científica': 10765, 'Fantasia': 10765, 'Novela': 10766, 'Talk show': 10767, 'Guerra': 10768, 'Western': 37 },
 };
 
+// Filmes guardados com estreia próxima (cinema / digital em Portugal)
+async function fetchHomeMovies({ ids = [] } = {}) {
+  const movieIds = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 40);
+  if (!movieIds.length) return [];
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const from = todayIso(-14);
+  const to = todayIso(400);
+  const results = new Array(movieIds.length).fill(null);
+  await mapLimit(movieIds, 5, async (tmdbId, index) => {
+    try {
+      const movie = await memo(`mv|${tmdbId}`, () => tmdbRequest(`/movie/${tmdbId}?language=pt-PT`, tmdbApiKey), 6 * 60 * 60 * 1000);
+      const dates = await memo(`mvr|${tmdbId}`, () => tmdbRequest(`/movie/${tmdbId}/release_dates`, tmdbApiKey), 6 * 60 * 60 * 1000).catch(() => null);
+      const pt = dates?.results?.find((entry) => entry.iso_3166_1 === 'PT')?.release_dates || [];
+      const releases = [];
+      const earliest = (type) => pt.filter((entry) => entry.type === type && entry.release_date).map((entry) => entry.release_date.slice(0, 10)).sort()[0];
+      if (earliest(3)) releases.push({ date: earliest(3), label: 'Estreia no cinema' });
+      if (earliest(4)) releases.push({ date: earliest(4), label: 'Disponível em digital' });
+      if (!releases.length && movie.release_date) releases.push({ date: movie.release_date, label: 'Estreia' });
+      const upcoming = releases.filter((entry) => entry.date >= from && entry.date <= to);
+      if (upcoming.length) results[index] = { tmdbId, id: `movie-${tmdbId}`, name: movie.title || '', poster: tmdbImage(movie.poster_path, sizes.poster, baseUrl), backdrop: tmdbImage(movie.backdrop_path || movie.poster_path, sizes.backdrop, baseUrl), releases: upcoming };
+    } catch { /* ignora */ }
+  });
+  return results.filter(Boolean);
+}
+
+const HOME_KIDS_OK = ['Animação', 'Família', 'Infantil'];
+const HOME_KIDS_BLOCKED = ['Terror', 'Crime', 'Thriller', 'Guerra', 'Mistério'];
+const homeKidsAllowed = (item) => { const genres = item.genres?.length ? item.genres : [item.genre]; return genres.some((genre) => HOME_KIDS_OK.includes(genre)) && !genres.some((genre) => HOME_KIDS_BLOCKED.includes(genre)); };
+
 // Sugestões: por semente (o que viste), por géneros escolhidos/mais vistos e um mix ordenado por afinidade
-async function fetchHomeRecommendations({ seeds = [], genres = [], exclude = [] } = {}) {
+async function fetchHomeRecommendations({ seeds = [], genres = [], exclude = [], kids = false } = {}) {
   const { tmdbApiKey } = await readIntegrations();
   if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
   const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
   const excluded = new Set((Array.isArray(exclude) ? exclude : []).map(String));
-  const clean = (list, type) => (list || []).filter((entry) => entry.poster_path && !entry.adult).map((entry) => ({ ...normalizeTmdbItem({ ...entry, media_type: type }, baseUrl, sizes), votes: Number(entry.vote_count) || 0, popularity: Number(entry.popularity) || 0 })).filter((item) => !excluded.has(item.id));
+  const clean = (list, type) => (list || []).filter((entry) => entry.poster_path && !entry.adult).map((entry) => ({ ...normalizeTmdbItem({ ...entry, media_type: type }, baseUrl, sizes), votes: Number(entry.vote_count) || 0, popularity: Number(entry.popularity) || 0 })).filter((item) => !excluded.has(item.id) && (!kids || homeKidsAllowed(item)));
   const seedList = (Array.isArray(seeds) ? seeds : []).filter((seed) => /^\d+$/.test(String(seed?.tmdbId)) && ['movie', 'tv'].includes(seed?.tmdbType)).slice(0, 4);
   const groups = new Array(seedList.length).fill(null);
   await mapLimit(seedList, 4, async (seed, index) => {
@@ -2263,13 +2296,13 @@ async function fetchHomeRecommendations({ seeds = [], genres = [], exclude = [] 
       if (items.length) groups[index] = { seed: { id: `${seed.tmdbType}-${seed.tmdbId}`, title: String(seed.title || ''), type: seed.tmdbType === 'movie' ? 'Filme' : 'Série' }, items };
     } catch { /* sem recomendações para esta semente */ }
   });
-  const wantedGenres = [...new Set((Array.isArray(genres) ? genres : []).map(String))].slice(0, 4);
+  const wantedGenres = kids ? ['Animação', 'Família', 'Infantil'] : [...new Set((Array.isArray(genres) ? genres : []).map(String))].slice(0, 4);
   const byGenre = [];
   for (const type of ['movie', 'tv']) {
     const ids = [...new Set(wantedGenres.map((name) => HOME_GENRES[type][name]).filter(Boolean))];
     if (!ids.length) continue;
     try {
-      const data = await memo(`disc|${type}|${ids.join(',')}`, () => tmdbRequest(`/discover/${type}?language=pt-PT&sort_by=popularity.desc&include_adult=false&vote_count.gte=250&vote_average.gte=6.5&with_genres=${ids.join('|')}&page=1`, tmdbApiKey), 3 * 60 * 60 * 1000);
+      const data = await memo(`disc|${type}|${ids.join(',')}`, () => tmdbRequest(`/discover/${type}?language=pt-PT&sort_by=popularity.desc&include_adult=false&vote_count.gte=250&vote_average.gte=6.5&with_genres=${ids.join('|')}${kids && type === 'movie' ? '&certification_country=PT&certification.lte=M%2F12' : ''}&page=1`, tmdbApiKey), 3 * 60 * 60 * 1000);
       byGenre.push(...clean(data.results, type).slice(0, 14));
     } catch { /* ignora */ }
   }
@@ -2281,7 +2314,7 @@ async function fetchHomeRecommendations({ seeds = [], genres = [], exclude = [] 
   let mixed = [...scored.values()].sort((a, b) => b.score - a.score).map((entry) => entry.item).slice(0, 30);
   if (!mixed.length) {
     const trending = await memo('trending|all', () => tmdbRequest(`/trending/all/week?language=pt-PT`, tmdbApiKey), 60 * 60 * 1000).catch(() => ({ results: [] }));
-    mixed = (trending.results || []).filter((entry) => entry.poster_path && !entry.adult && ['movie', 'tv'].includes(entry.media_type)).map((entry) => normalizeTmdbItem(entry, baseUrl, sizes)).filter((item) => !excluded.has(item.id)).slice(0, 24);
+    mixed = (trending.results || []).filter((entry) => entry.poster_path && !entry.adult && ['movie', 'tv'].includes(entry.media_type)).map((entry) => normalizeTmdbItem(entry, baseUrl, sizes)).filter((item) => !excluded.has(item.id) && (!kids || homeKidsAllowed(item))).slice(0, 24);
   }
   return { groups: groups.filter(Boolean), mixed, personalized: groups.some(Boolean) || byGenre.length > 0 };
 }
@@ -2457,6 +2490,92 @@ function configureContentSecurityPolicy() {
   });
 }
 
+// ---- Atualizações diretas pelo GitHub (Releases) ----
+// Procura a última versão, descarrega o instalador, confirma a soma SHA-256 publicada pelo GitHub e lança-o.
+const UPDATE_REPO = 'NightmareFTW/StreamNexus';
+const updateTestMode = () => !app.isPackaged && Boolean(process.env.STREAMNEXUS_UPDATE_API); // só para testes locais
+const currentVersion = () => (!app.isPackaged && process.env.STREAMNEXUS_TEST_VERSION) || app.getVersion();
+const versionParts = (value) => String(value || '').replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map((part) => parseInt(part, 10) || 0);
+function isNewerVersion(candidate, current) {
+  const a = versionParts(candidate);
+  const b = versionParts(current);
+  for (let index = 0; index < 3; index += 1) { if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) > (b[index] || 0); }
+  return false;
+}
+let lastUpdate = null;
+let updateBusy = false;
+const sendUpdateProgress = (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:progress', payload); };
+
+async function checkForUpdate() {
+  const current = currentVersion();
+  const endpoint = updateTestMode() ? process.env.STREAMNEXUS_UPDATE_API : `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+  const response = await fetch(endpoint, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'StreamNexus-Updater' }, signal: AbortSignal.timeout(15000) });
+  if (response.status === 404) { lastUpdate = { current, latest: current, available: false, packaged: app.isPackaged || updateTestMode(), asset: null, releaseUrl: '', notes: '' }; return lastUpdate; }
+  if (!response.ok) throw new Error(`O GitHub respondeu com erro ${response.status}.`);
+  const release = await response.json();
+  const latest = String(release.tag_name || '').replace(/^v/i, '');
+  const candidates = (release.assets || []).filter((entry) => /\.exe$/i.test(entry.name || '') && !/blockmap|uninstall/i.test(entry.name));
+  const asset = candidates.sort((x, y) => Number(/setup|install/i.test(y.name)) - Number(/setup|install/i.test(x.name)))[0];
+  lastUpdate = {
+    current, latest, available: Boolean(latest) && isNewerVersion(latest, current), packaged: app.isPackaged || updateTestMode(),
+    releaseUrl: String(release.html_url || `https://github.com/${UPDATE_REPO}/releases`), notes: String(release.body || '').slice(0, 1500),
+    asset: asset ? { name: path.basename(String(asset.name)), size: Number(asset.size) || 0, url: String(asset.browser_download_url || ''), sha256: String(asset.digest || '').startsWith('sha256:') ? String(asset.digest).slice(7).toLowerCase() : '' } : null,
+  };
+  return lastUpdate;
+}
+
+async function installUpdate() {
+  if (updateBusy) throw new Error('A transferência já está em curso.');
+  if (!app.isPackaged && !updateTestMode()) throw new Error('A atualização direta só funciona na versão instalada. Descarrega o instalador na página da versão.');
+  const info = lastUpdate?.available ? lastUpdate : await checkForUpdate();
+  if (!info.available || !info.asset?.url) throw new Error('Não há nenhuma atualização para instalar.');
+  const { asset } = info;
+  const url = new URL(asset.url);
+  const officialUrl = url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith(`/${UPDATE_REPO}/releases/download/`);
+  if (!officialUrl && !updateTestMode()) throw new Error('O endereço de transferência não é do repositório oficial.');
+  if (!/^[\w.\- ()]+\.exe$/i.test(asset.name)) throw new Error('O nome do instalador não é válido.');
+  if (!asset.sha256 && !updateTestMode()) throw new Error('Esta versão não traz a soma de verificação (SHA-256), por isso não a instalo automaticamente. Descarrega-a na página da versão.');
+  updateBusy = true;
+  const dir = path.join(app.getPath('temp'), 'StreamNexus-update');
+  const file = path.join(dir, asset.name);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.rm(file, { force: true });
+    const response = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'StreamNexus-Updater' } });
+    if (!response.ok || !response.body) throw new Error(`A transferência falhou (${response.status}).`);
+    const finalHost = new URL(response.url).hostname;
+    if (!updateTestMode() && !(finalHost === 'github.com' || finalHost.endsWith('.githubusercontent.com') || finalHost === 'githubusercontent.com')) throw new Error('A transferência foi redirecionada para um servidor inesperado.');
+    const total = Number(response.headers.get('content-length')) || asset.size || 0;
+    const hash = createHash('sha256');
+    const output = fsSync.createWriteStream(file);
+    let received = 0;
+    let lastSent = 0;
+    const source = Readable.fromWeb(response.body);
+    source.on('data', (chunk) => {
+      hash.update(chunk);
+      received += chunk.length;
+      const now = Date.now();
+      if (now - lastSent > 150) { lastSent = now; sendUpdateProgress({ phase: 'download', received, total }); }
+    });
+    await pipeline(source, output);
+    sendUpdateProgress({ phase: 'download', received, total });
+    sendUpdateProgress({ phase: 'verify', received, total });
+    if (asset.size && received !== asset.size) throw new Error('O ficheiro transferido está incompleto. Tenta de novo.');
+    if (asset.sha256 && hash.digest('hex') !== asset.sha256) throw new Error('A verificação SHA-256 falhou: o ficheiro não corresponde ao publicado. Não foi instalado.');
+    if (!app.isPackaged && process.env.STREAMNEXUS_UPDATE_DRYRUN) return { ready: true, file, bytes: received };
+    sendUpdateProgress({ phase: 'install', received, total });
+    // O instalador não pode substituir a app em execução: um pequeno script espera, instala em silêncio e volta a abrir a app.
+    const script = path.join(dir, 'instalar-atualizacao.cmd');
+    await fs.writeFile(script, `@echo off\r\ntimeout /t 2 /nobreak >nul\r\n"${file}" /S\r\nstart "" "${process.execPath}"\r\ndel "%~f0"\r\n`);
+    spawn('cmd.exe', ['/c', script], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    setTimeout(() => app.quit(), 600);
+    return { ready: false, installing: true };
+  } catch (error) {
+    await fs.rm(file, { force: true }).catch(() => {});
+    throw error;
+  } finally { updateBusy = false; }
+}
+
 function registerIpc() {
   const resultHandler = (operation) => async (_event, value) => {
     try { return { ok: true, data: await operation(value) }; }
@@ -2474,6 +2593,7 @@ function registerIpc() {
   ipcMain.handle('torrentio:releases', resultHandler(fetchTorrentioReleases));
   ipcMain.handle('tmdb:tv', resultHandler(fetchTmdbTv));
   ipcMain.handle('home:schedule', resultHandler(fetchHomeSchedule));
+  ipcMain.handle('home:movies', resultHandler(fetchHomeMovies));
   ipcMain.handle('home:recommend', resultHandler(fetchHomeRecommendations));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
@@ -2485,6 +2605,8 @@ function registerIpc() {
   ipcMain.handle('feed:category', resultHandler(feedCategory));
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
   ipcMain.handle('adult:media', resultHandler(resolveAdultMedia));
+  ipcMain.handle('update:check', resultHandler(checkForUpdate));
+  ipcMain.handle('update:install', resultHandler(installUpdate));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
   ipcMain.handle('tv:channels', resultHandler(fetchLiveChannels));
   ipcMain.handle('tv:health', resultHandler(fetchLiveHealth));

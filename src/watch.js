@@ -1,5 +1,5 @@
 // Progresso de visionamento por perfil: filmes e episódios (posição, duração, visto).
-import { pkey } from './profiles.js';
+import { pkey, scopedKeyFor } from './profiles.js';
 
 const WATCH_KEY = 'streamnexus.watch';
 export const FINISHED_RATIO = 0.92;
@@ -7,6 +7,12 @@ export const FINISHED_RATIO = 0.92;
 export function loadWatch() {
   try { return JSON.parse(localStorage.getItem(pkey(WATCH_KEY)) || '{}') || {}; } catch { return {}; }
 }
+// Dados de OUTRO perfil (usado na "Noite em família"); só leitura
+export function loadProfileData(profileId) {
+  const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(scopedKeyFor(profileId, key)) || 'null') ?? fallback; } catch { return fallback; } };
+  return { watch: read(WATCH_KEY, {}), saved: read('streamnexus.watchlist', []), savedItems: read('streamnexus.watchlist.items', {}), taste: read('streamnexus.taste', {}) };
+}
+
 export function saveWatch(map) {
   try { localStorage.setItem(pkey(WATCH_KEY), JSON.stringify(map)); } catch { /* o histórico fica só nesta sessão */ }
 }

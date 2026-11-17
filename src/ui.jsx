@@ -5,6 +5,11 @@ export const WatchContext = createContext(null);
 // Resolve a pré-visualização de um vídeo (item -> { url, duration }); só existe nos vídeos +18
 export const PreviewContext = createContext(null);
 
+// Separador do logótipo STREAM››NEXUS: dois chevrons (fluxo), centrados na altura das maiúsculas
+export function BrandFlow() {
+  return <svg className="brand-flow" viewBox="0 0 96 100" aria-hidden="true"><path d="M8 12 42 50 8 88" fill="none" stroke="currentColor" strokeWidth="15" strokeLinecap="round" strokeLinejoin="round"/><path d="M50 12 84 50 50 88" fill="none" stroke="#fff" strokeWidth="15" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+}
+
 export const POSTER_KIND = { 'Álbum': 'music', 'Livro': 'book', 'Canal': 'channel', 'Vídeo': 'clip' };
 
 export function Icon({ name, size = 18, stroke = 1.8 }) {

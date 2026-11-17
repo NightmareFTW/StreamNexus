@@ -4,11 +4,12 @@ export const DEFAULT_PROFILE_ID = 'default';
 const PROFILES_KEY = 'streamnexus.profiles';
 export const PROFILE_COLORS = ['#e50914', '#2f80ed', '#27ae60', '#f2994a', '#9b51e0', '#eb5757', '#00b8d9', '#f2c94c'];
 // Chaves que pertencem a cada perfil (a lista serve para apagar os dados ao remover um perfil)
-export const PROFILE_DATA_KEYS = ['streamnexus.watchlist', 'streamnexus.watchlist.items', 'streamnexus.settings.adult', 'streamnexus.adult.orientation', 'streamnexus.tv.country', 'streamnexus.reading', 'streamnexus.watch', 'streamnexus.taste', 'streamnexus.music.history'];
+export const PROFILE_DATA_KEYS = ['streamnexus.watchlist', 'streamnexus.watchlist.items', 'streamnexus.settings.adult', 'streamnexus.adult.orientation', 'streamnexus.tv.country', 'streamnexus.reading', 'streamnexus.watch', 'streamnexus.taste', 'streamnexus.music.history', 'streamnexus.music.last', 'streamnexus.prefs', 'streamnexus.notified'];
 
 let activeProfileId = DEFAULT_PROFILE_ID;
 export const setActiveProfile = (id) => { activeProfileId = id || DEFAULT_PROFILE_ID; };
 export const getActiveProfileId = () => activeProfileId;
+export const scopedKeyFor = (id, key) => (id === DEFAULT_PROFILE_ID ? key : `${key}@${id}`);
 export const pkey = (key) => (activeProfileId === DEFAULT_PROFILE_ID ? key : `${key}@${activeProfileId}`);
 
 export function loadProfiles() {

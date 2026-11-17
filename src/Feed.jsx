@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
 
+// Filtro opcional aplicado a tudo o que chega dos feeds (perfil infantil)
+let feedFilter = () => true;
+export const setFeedFilter = (fn) => { feedFilter = fn || (() => true); };
+
 const SKELETON_KIND = { music: 'music', books: 'book', adultvideos: 'clip' };
 
 function Skeleton({ kind, count = 3 }) {
@@ -53,7 +57,7 @@ function Rail({ shelf, index, kind, orientation, seen, renderCard, activePage, o
         const page = await window.streamnexus.feedShelf({ kind, shelfId: shelf.feedId, cursor: current.cursor, orientation });
         current.cursor = page.cursor;
         current.hasMore = Boolean(page.hasMore);
-        fresh = (page.items || []).filter((item) => item.id && item.poster && !seen.current.has(item.id));
+        fresh = (page.items || []).filter((item) => item.id && item.poster && feedFilter(item) && !seen.current.has(item.id));
       }
       fresh.forEach((item) => seen.current.add(item.id));
       current.errors = 0;
@@ -107,7 +111,7 @@ function CategoryGrid({ kind, category, orientation, renderCard, mode = 'categor
         if (run !== state.current.run) return;
         current.cursor = page.cursor;
         current.hasMore = Boolean(page.hasMore);
-        fresh = (page.items || []).filter((item) => item.id && (item.poster || (mode === 'search' && kind === 'books')) && !current.seen.has(item.id));
+        fresh = (page.items || []).filter((item) => item.id && (item.poster || (mode === 'search' && kind === 'books')) && feedFilter(item) && !current.seen.has(item.id));
       }
       fresh.forEach((item) => current.seen.add(item.id));
       current.total = (current.total || 0) + fresh.length;
@@ -164,7 +168,7 @@ export function FeedShelves({ kind, shelves, genre, activePage, orientation = ''
       current.offset += result.consumed || 0;
       current.done = Boolean(result.done) || !result.consumed;
       const fresh = (result.shelves || [])
-        .map((shelf) => ({ ...shelf, page: activePage, items: (shelf.items || []).filter((item) => item.id && item.poster && !seen.current.has(item.id)) }))
+        .map((shelf) => ({ ...shelf, page: activePage, items: (shelf.items || []).filter((item) => item.id && item.poster && feedFilter(item) && !seen.current.has(item.id)) }))
         .filter((shelf) => shelf.items.length >= 4);
       fresh.forEach((shelf) => shelf.items.forEach((item) => seen.current.add(item.id)));
       current.errors = 0;

@@ -11,7 +11,7 @@ const readMinimized = () => { try { return window.localStorage.getItem('streamne
 // Mini leitor global: fica montado enquanto se navega. Dois modos:
 //  - 'tracks': faixas completas gratuitas tocadas aqui (elemento <audio>)
 //  - 'spotify': comando remoto do Spotify (Premium) aberto noutro dispositivo
-export function MiniPlayer({ mini, suspended, hidden = false, onIndex, onClose, onError, onRemote }) {
+export function MiniPlayer({ mini, suspended, hidden = false, onIndex, onClose, onError, onRemote, onProgress }) {
   const audioRef = useRef(null);
   const [minimized, setMinimized] = useState(readMinimized);
   const [playing, setPlaying] = useState(false);
@@ -25,11 +25,19 @@ export function MiniPlayer({ mini, suspended, hidden = false, onIndex, onClose, 
   const historyRef = useRef([]);
   const lastPlayerError = useRef('');
   const callbacks = useRef({});
-  callbacks.current = { onRemote, onError };
+  callbacks.current = { onRemote, onError, onProgress };
+  const startAtRef = useRef({ url: mini.tracks?.[mini.index]?.url, at: mini.startAt || 0 });
   const isSpotify = mini.mode === 'spotify';
   const track = isSpotify ? null : mini.tracks[mini.index];
 
   const toggleMinimized = () => setMinimized((value) => { const next = !value; try { window.localStorage.setItem('streamnexus.mini.minimized', next ? '1' : '0'); } catch { /* sem armazenamento */ } return next; });
+
+  // guarda a faixa e a posição de 5 em 5 segundos (para retomar mais tarde)
+  useEffect(() => {
+    if (isSpotify) return undefined;
+    const timer = window.setInterval(() => callbacks.current.onProgress?.(mini.index, audioRef.current?.currentTime || 0), 5000);
+    return () => { callbacks.current.onProgress?.(mini.index, audioRef.current?.currentTime || 0); window.clearInterval(timer); };
+  }, [isSpotify, mini.index]);
 
   // --- modo faixas ---
   useEffect(() => { if (audioRef.current) audioRef.current.volume = volume; }, [volume, track?.url]);
@@ -129,7 +137,7 @@ export function MiniPlayer({ mini, suspended, hidden = false, onIndex, onClose, 
   return <div className={`mini-player ${minimized ? 'is-min' : ''} ${suspended ? 'is-suspended' : ''} ${hidden ? 'is-hidden' : ''}`} role="region" aria-label="Mini leitor de música">
     {!isSpotify && track && <audio ref={audioRef} key={track.url} src={track.url} autoPlay
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-      onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+      onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration || 0); if (startAtRef.current.at && track.url === startAtRef.current.url) { event.currentTarget.currentTime = startAtRef.current.at; startAtRef.current.at = 0; } }}
       onEnded={() => advance(true)}
       onError={() => { onError?.(`Não foi possível reproduzir “${track.title}”.`); advance(false); }}/>}
     {minimized ? <>
