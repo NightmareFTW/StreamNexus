@@ -6,6 +6,8 @@ StreamNexus is an independent desktop media discovery app built with Electron, R
 
 Grab the latest Windows installer from the [Releases page](https://github.com/NightmareFTW/StreamNexus/releases). The installer is not code-signed yet, so Windows SmartScreen may show a warning: choose **More info → Run anyway**.
 
+Sharing with family? See the [quick guide for family members (Portuguese)](docs/GUIA-FAMILIA.md): install, paste an invite code and PIN generated in Settings, and connect your own Real-Debrid account.
+
 ## Features
 
 - **Movies, series and TV shows** from TMDB, with shelves that keep loading as you scroll and genre grids with infinite scroll.
