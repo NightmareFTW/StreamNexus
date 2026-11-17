@@ -388,6 +388,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const subtitleVtt = useRef(new Map());
   const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [subtitleInfo, setSubtitleInfo] = useState(null);
+  const [subtitleLine, setSubtitleLine] = useState('');
   const [subtitleShownUrl, setSubtitleShownUrl] = useState('');
   const [downloadedSubs, setDownloadedSubs] = useState([]);
   const [activeSubId, setActiveSubId] = useState('');
@@ -570,17 +571,35 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     return () => URL.revokeObjectURL(shifted);
   }, [subtitleTrackUrl, playing?.offset, subtitleDelay]);
 
+  // As legendas transferidas são desenhadas pela própria app (por cima do vídeo e dos controlos): a faixa fica "hidden"
+  // — carrega as falas e avisa quando muda a fala ativa — e o texto aparece no elemento .subtitle-cue.
   useEffect(() => {
-    if (!subtitleShownUrl) return undefined;
+    if (!subtitleShownUrl) { setSubtitleLine(''); return undefined; }
+    const video = playerVideoRef.current;
+    const ours = () => Array.from(video?.textTracks || []).filter((track) => String(track.label || '').startsWith('OpenSubtitles ·'));
+    const clean = (text) => String(text || '').replace(/<[^>]+>/g, '').replace(/&#0?39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim();
+    const sync = () => setSubtitleLine(clean(ours().flatMap((track) => Array.from(track.activeCues || [])).map((cue) => cue.text).join('\n')));
+    const listened = new Set();
     const show = () => {
-      Array.from(playerVideoRef.current?.textTracks || []).forEach((track) => { if (String(track.label || '').startsWith('OpenSubtitles ·')) track.mode = 'showing'; });
+      ours().forEach((track) => {
+        if (track.mode !== 'hidden') track.mode = 'hidden';
+        if (!listened.has(track)) { listened.add(track); track.addEventListener('cuechange', sync); }
+      });
+      sync();
     };
     show();
-    const video = playerVideoRef.current;
     video?.addEventListener('loadedmetadata', show);
     video?.addEventListener('loadeddata', show);
+    video?.addEventListener('timeupdate', sync);
+    video?.addEventListener('seeked', sync);
     const timers = [80, 400, 1200, 3000].map((delay) => window.setTimeout(show, delay));
-    return () => { timers.forEach((timer) => window.clearTimeout(timer)); video?.removeEventListener('loadedmetadata', show); video?.removeEventListener('loadeddata', show); };
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      video?.removeEventListener('loadedmetadata', show); video?.removeEventListener('loadeddata', show);
+      video?.removeEventListener('timeupdate', sync); video?.removeEventListener('seeked', sync);
+      listened.forEach((track) => track.removeEventListener('cuechange', sync));
+      setSubtitleLine('');
+    };
   }, [subtitleShownUrl, playing?.url]);
 
   useEffect(() => {
@@ -1251,7 +1270,11 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       if (!vtt.startsWith('WEBVTT')) vtt = `WEBVTT\n\n${vtt}`;
       const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt;charset=utf-8' }));
       subtitleVtt.current.set(url, vtt);
-      const entry = { fileId: subtitle.fileId, label: subtitle.label || subtitle.language || 'Legenda', language: subtitle.language || 'pt-PT', fileName: subtitle.fileName || '', release: subtitle.release || '', url, forFile };
+      const wordsOf = (words) => new RegExp(`(?<![\\p{L}])(${words})(?![\\p{L}])`, 'giu');
+      const brazilian = (vtt.match(wordsOf('você|vocês|pra|né|cara|tá|gente|legal|beleza|cadê')) || []).length;
+      const european = (vtt.match(wordsOf('tu|estás|pá|miúdo|miúda|fixe|rapariga|autocarro|ecrã|telemóvel|gajo|bué')) || []).length;
+      const looksBrazilian = brazilian >= 8 && brazilian > european * 3;
+      const entry = { fileId: subtitle.fileId, label: looksBrazilian ? 'Português do Brasil (detetado)' : subtitle.label || subtitle.language || 'Legenda', language: subtitle.language || 'pt-PT', fileName: subtitle.fileName || '', release: subtitle.release || '', url, forFile };
       setDownloadedSubs((list) => [...list, entry]);
       activateSubtitle(entry);
     } catch (error) {
@@ -2169,6 +2192,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
             {!playing?.url && <div className="player-empty">{playing?.error ? <span className="player-error-icon"><Icon name="alert" size={26}/></span> : <span className="spinner"></span>}<strong>{playing?.error ? 'Não foi possível preparar o vídeo' : playing?.resuming ? 'A retomar a reprodução…' : playing?.converting ? 'A converter o vídeo para H.264…' : playing?.phase === 'searching' ? 'A procurar a melhor versão…' : playing?.phase === 'adding' ? `A enviar para o Real-Debrid${playing.attempt > 1 ? ` (versão ${playing.attempt} de ${playing.attemptTotal})` : ''}…` : 'A preparar reprodução…'}</strong><span>{playing?.error || (playing?.pending ? `${RD_STATUS_TEXT[playing.transferStatus] || 'A aguardar o Real-Debrid'}${playing.progress ? ` · ${Math.round(playing.progress)}%` : ''}` : 'A preparar o ficheiro de vídeo')}</span>{!playing?.error && playing?.releaseTitle && <small className="player-release">{playing.releaseTitle}{playing.switched ? ` · versão ${(playing.candidateIndex || 0) + 1}` : ''}</small>}{playing?.pending && <div className="player-progress"><i style={{ width: `${playing.progress || 3}%` }}/></div>}{playing?.error && <button className="button button-quiet button-sm" onClick={() => { setModal(null); setPlaying(null); }}>Fechar</button>}</div>}
           </div>
+          {subtitleLine && <div className="subtitle-cue" aria-hidden="true">{subtitleLine.split('\n').map((line, index) => <span key={index}>{line}</span>)}</div>}
           <div className={`player-overlay ${playerControlsVisible ? '' : 'is-hidden'}`} onClick={(event) => { if (event.target === event.currentTarget) togglePlayerPlayback(); }}>
             <div className="player-topbar">
               <div className="player-title"><span className="eyebrow">{playing?.live ? `AO VIVO · ${(playing.live.channel.creator || '').toUpperCase()}` : 'A REPRODUZIR A PARTIR DA TUA NUVEM'}</span><strong>{playing?.title}</strong>{playing?.audioWarning && <small className="audio-hint">O áudio pode não ser compatível. {playing.audioWarning} Também podes abrir com VLC.</small>}</div>
@@ -2185,7 +2209,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
               {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
               {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda transferida e ativa no vídeo.</p>}
               {subtitleStatus === 'selected' && <div className="subtitle-diag">
-                <small>{!subtitleInfo ? 'A ler a legenda…' : subtitleInfo.missing ? 'O leitor não criou a faixa das legendas.' : subtitleInfo.cues === null ? `Faixa criada (modo: ${subtitleInfo.mode}), o ficheiro ainda não foi lido.` : subtitleInfo.cues === 0 ? `A legenda foi lida, mas não tem falas (modo: ${subtitleInfo.mode}).` : `${subtitleInfo.cues} falas · de ${fmtClock(subtitleInfo.first)} a ${fmtClock(subtitleInfo.last)} · vídeo a ${fmtClock(subtitleInfo.now)} de ${fmtClock((playing?.totalDuration || playerVideoRef.current?.duration || 0))} · modo: ${subtitleInfo.mode} · ${subtitleInfo.active ? `fala agora: “${String(subtitleInfo.active).slice(0, 60)}”` : 'sem fala neste momento'}`}</small>
+                <small>{!subtitleInfo ? 'A ler a legenda…' : subtitleInfo.missing ? 'O leitor não criou a faixa das legendas.' : subtitleInfo.cues === null ? `Faixa criada (modo: ${subtitleInfo.mode}), o ficheiro ainda não foi lido.` : subtitleInfo.cues === 0 ? `A legenda foi lida, mas não tem falas (modo: ${subtitleInfo.mode}).` : `${subtitleInfo.cues} falas · de ${fmtClock(subtitleInfo.first)} a ${fmtClock(subtitleInfo.last)} · vídeo a ${fmtClock(subtitleInfo.now)} de ${fmtClock((playing?.totalDuration || playerVideoRef.current?.duration || 0))} · ${subtitleInfo.active ? `fala agora: “${String(subtitleInfo.active).slice(0, 60)}”` : 'sem fala neste momento'}`}</small>
                 <span className="subtitle-delay"><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value - 0.5) * 10) / 10)}>−0,5 s</button><em>{subtitleDelay > 0 ? '+' : ''}{String(subtitleDelay).replace('.', ',')} s</em><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value + 0.5) * 10) / 10)}>+0,5 s</button></span>
               </div>}
               {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
