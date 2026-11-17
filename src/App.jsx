@@ -1203,6 +1203,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         tmdbType: title?.tmdbType,
         query: fileName || title?.original || title?.title || '',
         titleQuery: title?.original || title?.title || '',
+        fileName,
         season: episode?.season,
         episode: episode?.episode,
       });
@@ -1265,7 +1266,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     if (cached) { activateSubtitle(cached); return; }
     setSubtitleStatus('downloading');
     try {
-      const result = await window.streamnexus.downloadSubtitle({ fileId: subtitle.fileId, fileName: subtitle.fileName });
+      const result = await window.streamnexus.downloadSubtitle({ fileId: subtitle.fileId, fileName: subtitle.fileName, url: subtitle.url });
       let vtt = String(result.text || '').replace(/^﻿/, '').replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2').trim();
       if (!vtt.startsWith('WEBVTT')) vtt = `WEBVTT\n\n${vtt}`;
       const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt;charset=utf-8' }));
@@ -2215,7 +2216,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
               {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
               {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
               {downloadedSubs.some((entry) => entry.forFile === (playing?.fileName || '')) && <div className="embedded-subtitles"><span>Legendas transferidas</span><div><button className={!subtitleTrackUrl && !activeEmbeddedTrack ? 'active' : ''} onClick={disableSubtitles}>Desligadas</button>{downloadedSubs.filter((entry) => entry.forFile === (playing?.fileName || '')).map((entry) => <button key={entry.fileId} className={activeSubId === entry.fileId ? 'active' : ''} onClick={() => activateSubtitle(entry)}>{entry.label} <small>{entry.language === 'pt-PT' ? 'PT-PT' : 'PT-BR'}{entry.release ? ` · ${entry.release.slice(0, 26)}` : ''}</small></button>)}</div></div>}
-              {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''} ${activeSubId === subtitle.fileId ? 'is-active' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.fileName}{subtitle.release ? ` · ${subtitle.release}` : ''}</small></span><span>{activeSubId === subtitle.fileId ? <><Icon name="check" size={13}/> Ativa</> : downloadedSubs.some((entry) => entry.fileId === subtitle.fileId && entry.forFile === (playing?.fileName || '')) ? 'Transferida' : <>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></>}</span></button>)}</div>}
+              {subtitleResults.length > 0 && <div className="subtitle-results">{subtitleResults.map((subtitle) => <button key={`${subtitle.fileId}-${subtitle.fileName}`} className={`subtitle-option ${subtitle.language === 'pt-PT' ? 'preferred' : ''} ${activeSubId === subtitle.fileId ? 'is-active' : ''}`} onClick={() => chooseSubtitle(subtitle)}><span><strong>{subtitle.label}</strong><small>{subtitle.match >= 3 ? 'Versão parecida com o ficheiro · ' : ''}{subtitle.fileName}{subtitle.release && subtitle.release !== subtitle.fileName ? ` · ${subtitle.release}` : ''}{subtitle.source ? ` · ${subtitle.source}` : ''}</small></span><span>{activeSubId === subtitle.fileId ? <><Icon name="check" size={13}/> Ativa</> : downloadedSubs.some((entry) => entry.fileId === subtitle.fileId && entry.forFile === (playing?.fileName || '')) ? 'Transferida' : <>{subtitle.language === 'pt-PT' ? 'PT-PT · Preferida' : 'PT-BR'} <Icon name="download" size={13}/></>}</span></button>)}</div>}
             </section>}
 
             <div className="player-bottom">

@@ -2110,7 +2110,7 @@ async function testOpenSubtitles(value = {}) {
   return { appName: 'OpenSubtitles' };
 }
 
-async function searchOpenSubtitles(value = {}) {
+async function searchOpenSubtitlesDirect(value = {}) {
   const settings = await readIntegrations();
   if (!settings.openSubtitlesApiKey) throw new Error('Adiciona a API key do OpenSubtitles em Integrações.');
   const params = new URLSearchParams({ languages: 'pt-BR,pt-PT', order_by: 'download_count', order_direction: 'desc' });
@@ -2145,7 +2145,70 @@ async function searchOpenSubtitles(value = {}) {
   }).filter((item) => item.fileId).sort((a, b) => (a.language === 'pt-PT' ? -1 : 0) - (b.language === 'pt-PT' ? -1 : 0) || b.downloads - a.downloads).slice(0, 30);
 }
 
+// ---- Legendas sem conta: o addon público de legendas do Stremio (dados do OpenSubtitles, UTF-8, várias versões) ----
+const SUBTITLE_TAGS = ['web', 'webdl', 'webrip', 'hdtv', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'amzn', 'nf', 'dsnp', 'hmax', 'x264', 'x265', 'h264', 'h265', 'hevc', 'aac', 'ddp5', '480p', '576p', '720p', '1080p', '2160p', 'proper', 'repack'];
+function releaseTokens(text) {
+  return String(text || '').toLowerCase().replace(/web-dl/g, 'webdl').replace(/dd\+?5\.?1/g, 'ddp5').split(/[^a-z0-9]+/).filter(Boolean);
+}
+// Quantas marcas (fonte, resolução, codec, grupo) a legenda partilha com o ficheiro que está a tocar.
+function releaseMatch(fileName, release) {
+  const file = releaseTokens(fileName);
+  const other = releaseTokens(release);
+  if (!file.length || !other.length) return 0;
+  const fileGroup = String(fileName || '').replace(/\.[a-z0-9]{2,4}$/i, '').split('-').pop().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const otherGroup = String(release || '').replace(/\.[a-z0-9]{2,4}$/i, '').split('-').pop().toLowerCase().replace(/[^a-z0-9]/g, '');
+  let score = SUBTITLE_TAGS.filter((tag) => file.includes(tag) && other.includes(tag)).length;
+  if (fileGroup && fileGroup.length > 2 && fileGroup === otherGroup) score += 3;
+  return score;
+}
+
+async function imdbIdFor(tmdbType, tmdbId, apiKey) {
+  const kind = tmdbType === 'tv' ? 'tv' : 'movie';
+  const data = await memo(`imdb|${kind}|${tmdbId}`, () => tmdbRequest(`/${kind}/${tmdbId}/external_ids`, apiKey), 24 * 60 * 60 * 1000);
+  return String(data?.imdb_id || '');
+}
+
+async function searchStremioSubtitles(value = {}, settings = {}) {
+  if (!value.tmdbId || !settings.tmdbApiKey) return [];
+  const imdb = await imdbIdFor(value.tmdbType, value.tmdbId, settings.tmdbApiKey);
+  if (!/^tt\d+$/.test(imdb)) return [];
+  let resource;
+  if (value.tmdbType === 'tv') {
+    if (!value.season || !value.episode) return [];
+    resource = `series/${imdb}:${Number(value.season)}:${Number(value.episode)}.json`;
+  } else resource = `movie/${imdb}.json`;
+  const data = await fetchPublicJson(`https://opensubtitles-v3.strem.io/subtitles/${resource}`, 15000);
+  return (data.subtitles || []).filter((entry) => ['por', 'pob'].includes(entry.lang) && /^https:\/\/[a-z0-9.-]+\.strem\.io\//i.test(entry.url || '')).map((entry) => ({
+    fileId: `sv3-${entry.id}`, url: entry.url, fileName: entry.subtitleFileName || entry.movieReleaseName || 'Legenda',
+    language: entry.lang === 'por' ? 'pt-PT' : 'pt-BR', label: entry.lang === 'por' ? 'Português de Portugal' : 'Português do Brasil',
+    release: entry.movieReleaseName || '', downloads: 0, hearingImpaired: false, source: 'Sem conta', fps: Number(entry.fpsMilli) || 0,
+  }));
+}
+
+async function searchSubtitles(value = {}) {
+  const settings = await readIntegrations();
+  const fileName = value.fileName || value.query || '';
+  const [stremio, direct] = await Promise.allSettled([searchStremioSubtitles(value, settings), settings.openSubtitlesApiKey ? searchOpenSubtitlesDirect(value) : Promise.resolve([])]);
+  const lists = [stremio, direct].map((entry) => (entry.status === 'fulfilled' ? entry.value : []));
+  if (!lists.flat().length) {
+    const failure = [stremio, direct].find((entry) => entry.status === 'rejected');
+    if (failure) throw new Error(String(failure.reason?.message || failure.reason));
+  }
+  const seen = new Set();
+  return lists.flat().map((item) => ({ ...item, match: releaseMatch(fileName, item.release || item.fileName) }))
+    .filter((item) => { const key = `${item.language}|${String(item.release || item.fileName).toLowerCase()}`; if (seen.has(key)) return false; seen.add(key); return true; })
+    .sort((a, b) => (a.language === 'pt-PT' ? 0 : 1) - (b.language === 'pt-PT' ? 0 : 1) || b.match - a.match || b.downloads - a.downloads)
+    .slice(0, 40);
+}
+
 async function downloadOpenSubtitle(value = {}) {
+  if (value.url) {
+    const direct = new URL(String(value.url));
+    if (direct.protocol !== 'https:' || !direct.hostname.endsWith('.strem.io')) throw new Error('Endereço de legenda não permitido.');
+    const response = await fetch(direct, { headers: { 'User-Agent': 'StreamNexus/0.1' }, signal: AbortSignal.timeout(20000) });
+    if (!response.ok) throw new Error(`A transferência da legenda falhou (HTTP ${response.status}).`);
+    return { text: await response.text(), fileName: value.fileName || 'subtitle.srt' };
+  }
   const settings = await readIntegrations();
   const token = await openSubtitlesLogin(settings);
   const response = await fetch(`${OPENSUBTITLES_API}/download`, {
@@ -2967,7 +3030,7 @@ function registerIpc() {
   });
   ipcMain.handle('tmdb:test', resultHandler(testTmdb));
   ipcMain.handle('opensubtitles:test', resultHandler(testOpenSubtitles));
-  ipcMain.handle('opensubtitles:search', resultHandler(searchOpenSubtitles));
+  ipcMain.handle('opensubtitles:search', resultHandler(searchSubtitles));
   ipcMain.handle('opensubtitles:download', resultHandler(downloadOpenSubtitle));
 }
 
