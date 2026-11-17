@@ -2212,6 +2212,80 @@ async function fetchTmdbTv({ tmdbId, season } = {}) {
   return { title: show.name || '', seasons, season: wanted, episodes };
 }
 
+// ---- Início: calendário de episódios e recomendações personalizadas (TMDB) ----
+const todayIso = (offsetDays = 0) => { const date = new Date(); date.setDate(date.getDate() + offsetDays); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
+
+// Próximos episódios (e o último emitido) das séries indicadas
+async function fetchHomeSchedule({ ids = [] } = {}) {
+  const tmdbIds = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 40);
+  if (!tmdbIds.length) return [];
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const brief = (entry) => (entry ? { season: entry.season_number, episode: entry.episode_number, name: entry.name || '', airDate: entry.air_date || '' } : null);
+  const results = new Array(tmdbIds.length).fill(null);
+  await mapLimit(tmdbIds, 5, async (tmdbId, index) => {
+    try {
+      const show = await memo(`tv|${tmdbId}`, () => tmdbRequest(`/tv/${tmdbId}?language=pt-PT`, tmdbApiKey), 6 * 60 * 60 * 1000);
+      const next = show.next_episode_to_air;
+      let upcoming = [];
+      if (next?.air_date) {
+        const detail = await memo(`tvs|${tmdbId}|${next.season_number}`, () => tmdbRequest(`/tv/${tmdbId}/season/${next.season_number}?language=pt-PT`, tmdbApiKey), 6 * 60 * 60 * 1000).catch(() => null);
+        const from = todayIso(0);
+        const to = todayIso(150);
+        upcoming = (detail?.episodes || []).filter((entry) => entry.air_date && entry.air_date >= from && entry.air_date <= to).map((entry) => ({ season: next.season_number, episode: entry.episode_number, name: entry.name || '', airDate: entry.air_date }));
+        if (!upcoming.length && next.air_date >= from) upcoming = [brief(next)];
+      }
+      results[index] = { tmdbId, id: `tv-${tmdbId}`, name: show.name || '', status: show.status || '', poster: tmdbImage(show.poster_path, sizes.poster, baseUrl), backdrop: tmdbImage(show.backdrop_path || show.poster_path, sizes.backdrop, baseUrl), last: brief(show.last_episode_to_air), upcoming };
+    } catch { /* uma série que falha não impede o resto */ }
+  });
+  return results.filter(Boolean);
+}
+
+const HOME_GENRES = {
+  movie: { 'Ação': 28, 'Aventura': 12, 'Animação': 16, 'Comédia': 35, 'Crime': 80, 'Documentário': 99, 'Drama': 18, 'Família': 10751, 'Fantasia': 14, 'História': 36, 'Terror': 27, 'Música': 10402, 'Mistério': 9648, 'Romance': 10749, 'Ficção científica': 878, 'Thriller': 53, 'Guerra': 10752, 'Western': 37 },
+  tv: { 'Ação': 10759, 'Ação e aventura': 10759, 'Aventura': 10759, 'Animação': 16, 'Comédia': 35, 'Crime': 80, 'Documentário': 99, 'Drama': 18, 'Família': 10751, 'Infantil': 10762, 'Mistério': 9648, 'Thriller': 9648, 'Terror': 9648, 'Reality': 10764, 'Ficção científica': 10765, 'Fantasia': 10765, 'Novela': 10766, 'Talk show': 10767, 'Guerra': 10768, 'Western': 37 },
+};
+
+// Sugestões: por semente (o que viste), por géneros escolhidos/mais vistos e um mix ordenado por afinidade
+async function fetchHomeRecommendations({ seeds = [], genres = [], exclude = [] } = {}) {
+  const { tmdbApiKey } = await readIntegrations();
+  if (!tmdbApiKey) throw new Error('Adiciona a API key do TMDB em Integrações.');
+  const { baseUrl, sizes } = await tmdbImageSettings(tmdbApiKey);
+  const excluded = new Set((Array.isArray(exclude) ? exclude : []).map(String));
+  const clean = (list, type) => (list || []).filter((entry) => entry.poster_path && !entry.adult).map((entry) => ({ ...normalizeTmdbItem({ ...entry, media_type: type }, baseUrl, sizes), votes: Number(entry.vote_count) || 0, popularity: Number(entry.popularity) || 0 })).filter((item) => !excluded.has(item.id));
+  const seedList = (Array.isArray(seeds) ? seeds : []).filter((seed) => /^\d+$/.test(String(seed?.tmdbId)) && ['movie', 'tv'].includes(seed?.tmdbType)).slice(0, 4);
+  const groups = new Array(seedList.length).fill(null);
+  await mapLimit(seedList, 4, async (seed, index) => {
+    try {
+      const data = await memo(`rec|${seed.tmdbType}|${seed.tmdbId}`, () => tmdbRequest(`/${seed.tmdbType}/${seed.tmdbId}/recommendations?language=pt-PT&page=1`, tmdbApiKey), 6 * 60 * 60 * 1000);
+      const items = clean(data.results, seed.tmdbType).slice(0, 18);
+      if (items.length) groups[index] = { seed: { id: `${seed.tmdbType}-${seed.tmdbId}`, title: String(seed.title || ''), type: seed.tmdbType === 'movie' ? 'Filme' : 'Série' }, items };
+    } catch { /* sem recomendações para esta semente */ }
+  });
+  const wantedGenres = [...new Set((Array.isArray(genres) ? genres : []).map(String))].slice(0, 4);
+  const byGenre = [];
+  for (const type of ['movie', 'tv']) {
+    const ids = [...new Set(wantedGenres.map((name) => HOME_GENRES[type][name]).filter(Boolean))];
+    if (!ids.length) continue;
+    try {
+      const data = await memo(`disc|${type}|${ids.join(',')}`, () => tmdbRequest(`/discover/${type}?language=pt-PT&sort_by=popularity.desc&include_adult=false&vote_count.gte=250&vote_average.gte=6.5&with_genres=${ids.join('|')}&page=1`, tmdbApiKey), 3 * 60 * 60 * 1000);
+      byGenre.push(...clean(data.results, type).slice(0, 14));
+    } catch { /* ignora */ }
+  }
+  const scored = new Map();
+  const bump = (item, amount) => { const entry = scored.get(item.id) || { item, score: 0 }; entry.score += amount; scored.set(item.id, entry); };
+  groups.filter(Boolean).forEach((group) => group.items.forEach((item, rank) => bump(item, 3 + (18 - rank) / 18)));
+  byGenre.forEach((item, rank) => bump(item, 1.5 + (14 - Math.min(rank, 14)) / 14));
+  scored.forEach((entry) => { entry.score += (Number(entry.item.rating) || 0) / 5 + Math.min(1, entry.item.votes / 4000); });
+  let mixed = [...scored.values()].sort((a, b) => b.score - a.score).map((entry) => entry.item).slice(0, 30);
+  if (!mixed.length) {
+    const trending = await memo('trending|all', () => tmdbRequest(`/trending/all/week?language=pt-PT`, tmdbApiKey), 60 * 60 * 1000).catch(() => ({ results: [] }));
+    mixed = (trending.results || []).filter((entry) => entry.poster_path && !entry.adult && ['movie', 'tv'].includes(entry.media_type)).map((entry) => normalizeTmdbItem(entry, baseUrl, sizes)).filter((item) => !excluded.has(item.id)).slice(0, 24);
+  }
+  return { groups: groups.filter(Boolean), mixed, personalized: groups.some(Boolean) || byGenre.length > 0 };
+}
+
 async function testProwlarr(value = {}) {
   const base = String(value.prowlarrUrl || '').trim().replace(/\/+$/, '');
   const key = String(value.prowlarrApiKey || '').trim();
@@ -2399,6 +2473,8 @@ function registerIpc() {
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
   ipcMain.handle('torrentio:releases', resultHandler(fetchTorrentioReleases));
   ipcMain.handle('tmdb:tv', resultHandler(fetchTmdbTv));
+  ipcMain.handle('home:schedule', resultHandler(fetchHomeSchedule));
+  ipcMain.handle('home:recommend', resultHandler(fetchHomeRecommendations));
   ipcMain.handle('prowlarr:add-release', resultHandler(addReleaseToRealDebrid));
   ipcMain.handle('tmdb:catalog', resultHandler(fetchTmdbCatalog));
   ipcMain.handle('tmdb:trailer', resultHandler(fetchTmdbTrailer));

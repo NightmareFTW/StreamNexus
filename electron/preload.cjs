@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   searchTorrentio: (value) => invokeRequest('torrentio:releases', value),
   resolveAdultMedia: (value) => invokeRequest('adult:media', value),
   fetchTvSeason: (value) => invokeRequest('tmdb:tv', value),
+  fetchHomeSchedule: (value) => invokeRequest('home:schedule', value),
+  fetchHomeRecommendations: (value) => invokeRequest('home:recommend', value),
   testProwlarr: (value) => invokeRequest('prowlarr:test', value),
   addReleaseToRealDebrid: (value) => invokeRequest('prowlarr:add-release', value),
   fetchCatalog: () => invokeRequest('tmdb:catalog'),

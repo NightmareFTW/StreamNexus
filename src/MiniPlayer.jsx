@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
+import { musicStore } from './musicStore.js';
 
 const clock = (seconds) => { const total = Math.max(0, Math.round(Number(seconds) || 0)); return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`; };
 const Glyph = ({ d, size = 16 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={d}/></svg>;
@@ -10,7 +11,7 @@ const readMinimized = () => { try { return window.localStorage.getItem('streamne
 // Mini leitor global: fica montado enquanto se navega. Dois modos:
 //  - 'tracks': faixas completas gratuitas tocadas aqui (elemento <audio>)
 //  - 'spotify': comando remoto do Spotify (Premium) aberto noutro dispositivo
-export function MiniPlayer({ mini, suspended, onIndex, onClose, onError, onRemote }) {
+export function MiniPlayer({ mini, suspended, hidden = false, onIndex, onClose, onError, onRemote }) {
   const audioRef = useRef(null);
   const [minimized, setMinimized] = useState(readMinimized);
   const [playing, setPlaying] = useState(false);
@@ -116,7 +117,16 @@ export function MiniPlayer({ mini, suspended, onIndex, onClose, onError, onRemot
   };
   const repeatLabel = repeatMode === 'off' ? 'Repetir: desligado' : repeatMode === 'track' || repeatMode === 'one' ? 'Repetir a faixa' : 'Repetir o álbum';
 
-  return <div className={`mini-player ${minimized ? 'is-min' : ''} ${suspended ? 'is-suspended' : ''}`} role="region" aria-label="Mini leitor de música">
+  // Publica o estado (para o widget do Início) e mantém os controlos sempre atualizados
+  useEffect(() => {
+    musicStore.set({ mode: isSpotify ? 'spotify' : 'tracks', title, subtitle, cover, playing: isPlaying, position, duration: total, volume, shuffle: shuffleOn, repeat: repeatMode, canPrev, canNext, albumTitle: mini.title, queue: isSpotify ? null : mini.tracks.map((entry) => ({ title: entry.title, duration: entry.duration })), index: isSpotify ? -1 : mini.index });
+  }, [title, subtitle, cover, isPlaying, position, total, volume, shuffleOn, repeatMode, canPrev, canNext, mini.index, mini.title]);
+  useEffect(() => {
+    musicStore.setControls({ toggle: togglePlay, prev, next, seek, setVolume: changeVolume, toggleShuffle, cycleRepeat, close: onClose, playIndex: (index) => { if (isSpotify) return; historyRef.current.push(mini.index); onIndex(index); } });
+  });
+  useEffect(() => () => musicStore.reset(), []);
+
+  return <div className={`mini-player ${minimized ? 'is-min' : ''} ${suspended ? 'is-suspended' : ''} ${hidden ? 'is-hidden' : ''}`} role="region" aria-label="Mini leitor de música">
     {!isSpotify && track && <audio ref={audioRef} key={track.url} src={track.url} autoPlay
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
       onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
