@@ -6,7 +6,7 @@ export const welcomeDone = () => { try { return localStorage.getItem(WELCOME_KEY
 export const markWelcomeDone = () => { try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* sem armazenamento */ } };
 
 const errorText = (error) => String(error?.message || error || 'Não foi possível concluir.').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-const SUMMARY = [['tmdb', 'Catálogo (TMDB)'], ['prowlarr', 'Pesquisa de fontes (Prowlarr)'], ['shelfarr', 'Pedidos de livros (Shelfarr)'], ['spotify', 'Música (Spotify)']];
+const SUMMARY = [['tmdb', 'Catálogo (TMDB)'], ['prowlarr', 'Pesquisa de fontes (Prowlarr)'], ['shelfarr', 'Pedidos de livros (Shelfarr)'], ['spotify', 'Música (Spotify)'], ['audiobookshelf', 'Audiolivros (Audiobookshelf)']];
 
 // Primeiro arranque: cola o código de convite e fica tudo ligado.
 export function WelcomeScreen({ onDone }) {
@@ -53,7 +53,7 @@ export function WelcomeScreen({ onDone }) {
 
 // Definições: gera o código de convite para partilhar com a família.
 export function InviteSettings({ onNotify }) {
-  const [include, setInclude] = useState({ tmdb: true, prowlarr: true, shelfarr: true, shelfarrToken: false, spotify: true });
+  const [include, setInclude] = useState({ tmdb: true, prowlarr: true, shelfarr: true, shelfarrToken: false, spotify: true, audiobookshelf: true, audiobookshelfToken: false });
   const [pin, setPin] = useState('');
   const [state, setState] = useState({ code: '', error: '' });
   if (!window.streamnexus?.isDesktop) return null;
@@ -75,6 +75,8 @@ export function InviteSettings({ onNotify }) {
       <label><input type="checkbox" checked={include.prowlarr} onChange={() => toggle('prowlarr')}/> Prowlarr (endereço e API key)</label>
       <label><input type="checkbox" checked={include.shelfarr} onChange={() => toggle('shelfarr')}/> Shelfarr (endereço)</label>
       <label><input type="checkbox" checked={include.spotify} onChange={() => toggle('spotify')}/> Spotify (Client ID e Secret da app)</label>
+      <label><input type="checkbox" checked={include.audiobookshelf} onChange={() => toggle('audiobookshelf')}/> Audiobookshelf (endereço)</label>
+      <label><input type="checkbox" checked={include.audiobookshelfToken} onChange={() => toggle('audiobookshelfToken')}/> Audiobookshelf (o meu token — o progresso fica na minha conta)</label>
       <label><input type="checkbox" checked={include.shelfarrToken} onChange={() => toggle('shelfarrToken')}/> Shelfarr (o meu token — os pedidos ficam em meu nome)</label>
     </div>
     <label className="input-label" htmlFor="invite-make-pin">PIN do convite</label>

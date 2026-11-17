@@ -107,9 +107,9 @@ async function readIntegrations() {
     const encrypted = await fs.readFile(integrationsFilePath());
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
     const { result } = await safeStorage.decryptStringAsync(encrypted);
-    return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
+    return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
   } catch (error) {
-    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
+    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
     throw error;
   }
 }
@@ -120,6 +120,8 @@ async function writeIntegrations(value) {
     prowlarrApiKey: String(value?.prowlarrApiKey || '').trim(),
     shelfarrUrl: String(value?.shelfarrUrl || '').trim().replace(/\/+$/, ''),
     shelfarrToken: String(value?.shelfarrToken || '').trim(),
+    audiobookshelfUrl: String(value?.audiobookshelfUrl || '').trim().replace(/\/+$/, ''),
+    audiobookshelfToken: String(value?.audiobookshelfToken || '').trim(),
     tmdbApiKey: String(value?.tmdbApiKey || '').trim(),
     spotifyClientId: String(value?.spotifyClientId || '').trim(),
     spotifyClientSecret: String(value?.spotifyClientSecret || '').trim(),
@@ -131,6 +133,11 @@ async function writeIntegrations(value) {
     let url;
     try { url = new URL(settings.prowlarrUrl); } catch { throw new Error('O endereço do Prowlarr não é válido.'); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Prowlarr.');
+  }
+  if (settings.audiobookshelfUrl) {
+    let url;
+    try { url = new URL(settings.audiobookshelfUrl); } catch { throw new Error('O endereço do Audiobookshelf não é válido.'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Audiobookshelf.');
   }
   if (settings.shelfarrUrl) {
     let url;
@@ -2433,6 +2440,8 @@ const INVITE_GROUPS = {
   shelfarr: ['shelfarrUrl'],
   shelfarrToken: ['shelfarrToken'],
   spotify: ['spotifyClientId', 'spotifyClientSecret'],
+  audiobookshelf: ['audiobookshelfUrl'],
+  audiobookshelfToken: ['audiobookshelfToken'],
 };
 function inviteKey(pin, salt) { return crypto.scryptSync(String(pin), salt, 32); }
 
@@ -2472,7 +2481,144 @@ async function importInvite({ code, pin } = {}) {
   }
   if (!applied.length) throw new Error('O convite não trazia nenhuma definição.');
   await writeIntegrations(current);
-  return { applied, tmdb: applied.includes('tmdbApiKey'), prowlarr: applied.includes('prowlarrUrl'), shelfarr: applied.includes('shelfarrUrl'), spotify: applied.includes('spotifyClientId'), settings: await readIntegrations() };
+  return { applied, tmdb: applied.includes('tmdbApiKey'), prowlarr: applied.includes('prowlarrUrl'), shelfarr: applied.includes('shelfarrUrl'), spotify: applied.includes('spotifyClientId'), audiobookshelf: applied.includes('audiobookshelfUrl'), settings: await readIntegrations() };
+}
+
+// ---- Audiobookshelf: a tua biblioteca de audiolivros (não usa indexadores; lê as pastas do servidor) ----
+const absProxy = { server: null, port: 0, secret: crypto.randomBytes(12).toString('hex') };
+
+async function absSettings() {
+  const settings = await readIntegrations();
+  if (!settings.audiobookshelfUrl || !settings.audiobookshelfToken) throw new Error('Configura o endereço e o token do Audiobookshelf nas definições.');
+  return settings;
+}
+
+async function absCall(settings, method, resource, body) {
+  let response;
+  try {
+    response = await fetch(pURL(settings.audiobookshelfUrl, resource), {
+      method,
+      headers: { Authorization: `Bearer ${settings.audiobookshelfToken}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch { throw new Error('Não consegui contactar o Audiobookshelf. Confirma o endereço e se o servidor está ligado.'); }
+  if (response.status === 401 || response.status === 403) throw new Error('O Audiobookshelf recusou o token. Copia-o de novo em Configuração > Utilizadores.');
+  if (!response.ok) throw new Error(`O Audiobookshelf respondeu com erro ${response.status}.`);
+  return response.json().catch(() => ({}));
+}
+
+// Áudio e capas passam por um servidor local que junta o token; assim o leitor não precisa de saber o token nem de suportar ?token=.
+async function ensureAbsProxy() {
+  if (absProxy.server) return absProxy.port;
+  absProxy.server = http.createServer(async (request, response) => {
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    const [, secret, kind] = url.pathname.split('/');
+    const target = url.searchParams.get('u') || '';
+    if (secret !== absProxy.secret || kind !== 'm' || !/^\/(api\/items|s\/item|api\/session|public\/session)\//.test(target)) { response.writeHead(403).end(); return; }
+    let settings;
+    try { settings = await absSettings(); } catch { response.writeHead(503).end(); return; }
+    const controller = new AbortController();
+    response.once('close', () => controller.abort());
+    try {
+      const upstream = await fetch(pURL(settings.audiobookshelfUrl, target), {
+        headers: { Authorization: `Bearer ${settings.audiobookshelfToken}`, ...(request.headers.range ? { Range: request.headers.range } : {}) },
+        signal: controller.signal,
+      });
+      const headers = {};
+      for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) { const value = upstream.headers.get(name); if (value) headers[name] = value; }
+      response.writeHead(upstream.status, headers);
+      if (!upstream.body) { response.end(); return; }
+      Readable.fromWeb(upstream.body).on('error', () => response.destroy()).pipe(response);
+    } catch { if (!response.headersSent) response.writeHead(502).end(); else response.destroy(); }
+  });
+  await new Promise((resolve, reject) => { absProxy.server.once('error', reject); absProxy.server.listen(0, '127.0.0.1', resolve); });
+  absProxy.port = absProxy.server.address().port;
+  return absProxy.port;
+}
+const absMediaUrl = (port, resource) => `http://127.0.0.1:${port}/${absProxy.secret}/m?u=${encodeURIComponent(resource)}`;
+
+async function absBookLibraries(settings) {
+  const data = await absCall(settings, 'GET', 'api/libraries');
+  return (data.libraries || []).filter((library) => library.mediaType === 'book');
+}
+
+function absItem(entry, port) {
+  const meta = entry.media?.metadata || {};
+  return {
+    id: entry.id, title: meta.title || 'Sem título', author: meta.authorName || meta.author || '', narrator: meta.narratorName || '',
+    duration: Number(entry.media?.duration) || 0, poster: absMediaUrl(port, `/api/items/${entry.id}/cover?width=400&format=jpeg`),
+    series: meta.seriesName || '', audio: Number(entry.media?.numAudioFiles ?? entry.media?.numTracks ?? 1) > 0,
+  };
+}
+
+async function testAudiobookshelf(value = {}) {
+  const settings = { audiobookshelfUrl: String(value.audiobookshelfUrl || '').trim().replace(/\/+$/, ''), audiobookshelfToken: String(value.audiobookshelfToken || '').trim() };
+  let parsed;
+  try { parsed = new URL(settings.audiobookshelfUrl); } catch { throw new Error('O endereço do Audiobookshelf não é válido.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !settings.audiobookshelfToken) throw new Error('Indica um endereço HTTP/HTTPS e o token do Audiobookshelf.');
+  const libraries = await absBookLibraries(settings);
+  return { libraries: libraries.length, names: libraries.map((library) => library.name) };
+}
+
+async function absLibraryItems({ query = '', page = 0 } = {}) {
+  const settings = await absSettings();
+  const port = await ensureAbsProxy();
+  const libraries = await absBookLibraries(settings);
+  const items = [];
+  for (const library of libraries) {
+    if (String(query).trim()) {
+      const data = await absCall(settings, 'GET', `api/libraries/${library.id}/search?q=${encodeURIComponent(String(query).trim())}&limit=24`);
+      for (const hit of data.book || []) if (hit.libraryItem) items.push(absItem(hit.libraryItem, port));
+    } else {
+      const data = await absCall(settings, 'GET', `api/libraries/${library.id}/items?limit=60&page=${Math.max(0, Number(page) || 0)}&sort=addedAt&desc=1&minified=1`);
+      for (const entry of data.results || []) items.push(absItem(entry, port));
+    }
+  }
+  return { items, libraries: libraries.length };
+}
+
+async function absContinueListening() {
+  const settings = await absSettings();
+  const port = await ensureAbsProxy();
+  const libraries = await absBookLibraries(settings);
+  const items = [];
+  for (const library of libraries) {
+    const shelves = await absCall(settings, 'GET', `api/libraries/${library.id}/personalized`).catch(() => []);
+    const shelf = (Array.isArray(shelves) ? shelves : []).find((entry) => entry.id === 'continue-listening');
+    for (const entry of shelf?.entities || []) items.push(absItem(entry, port));
+  }
+  return { items };
+}
+
+async function absPlay({ itemId } = {}) {
+  if (!/^[\w-]{4,80}$/.test(String(itemId || ''))) throw new Error('Audiolivro inválido.');
+  const settings = await absSettings();
+  const port = await ensureAbsProxy();
+  const session = await absCall(settings, 'POST', `api/items/${itemId}/play`, {
+    deviceInfo: { clientName: 'StreamNexus', deviceId: 'streamnexus-desktop' }, forceDirectPlay: true, forceTranscode: false,
+    supportedMimeTypes: ['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/webm', 'audio/x-m4b', 'audio/m4b'], mediaPlayer: 'html5',
+  });
+  const tracks = (session.audioTracks || []).map((track, index) => ({
+    title: track.title || `Parte ${index + 1}`, duration: Number(track.duration) || 0, startOffset: Number(track.startOffset) || 0,
+    url: absMediaUrl(port, String(track.contentUrl || '').startsWith('/') ? track.contentUrl : `/${track.contentUrl}`),
+  })).filter((track) => track.url);
+  if (!tracks.length) throw new Error('Este audiolivro não tem ficheiros de áudio.');
+  const position = Number(session.currentTime) || 0;
+  const index = Math.max(0, tracks.findIndex((track, i) => position >= track.startOffset && (i === tracks.length - 1 || position < tracks[i + 1].startOffset)));
+  return {
+    sessionId: session.id, itemId, title: session.displayTitle || session.mediaMetadata?.title || 'Audiolivro', author: session.displayAuthor || '',
+    poster: absMediaUrl(port, `/api/items/${itemId}/cover?width=400&format=jpeg`), duration: Number(session.duration) || tracks.reduce((sum, track) => sum + track.duration, 0),
+    tracks, index, startAt: Math.max(0, position - tracks[index].startOffset), position,
+  };
+}
+
+// Melhor esforço: o progresso fica registado no Audiobookshelf (aparece em "Continuar a ouvir" também lá).
+async function absSync({ sessionId, currentTime, timeListened, duration } = {}) {
+  if (!/^[\w-]{4,80}$/.test(String(sessionId || ''))) return { ok: false };
+  const settings = await absSettings();
+  await absCall(settings, 'POST', `api/session/${sessionId}/sync`, { currentTime: Number(currentTime) || 0, timeListened: Number(timeListened) || 0, duration: Number(duration) || 0 }).catch(() => null);
+  return { ok: true };
 }
 
 async function fetchReleaseMagnet(entry) {
@@ -2607,7 +2753,7 @@ function configureContentSecurityPolicy() {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https:",
+    "img-src 'self' data: https: http://127.0.0.1:*",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${DEV_URL} ws://127.0.0.1:5173 http://127.0.0.1:*`,
     "media-src 'self' blob: https: http://127.0.0.1:*",
@@ -2736,6 +2882,11 @@ function registerIpc() {
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
   ipcMain.handle('invite:create', resultHandler(createInvite));
   ipcMain.handle('invite:import', resultHandler(importInvite));
+  ipcMain.handle('abs:test', resultHandler(testAudiobookshelf));
+  ipcMain.handle('abs:items', resultHandler(absLibraryItems));
+  ipcMain.handle('abs:continue', resultHandler(absContinueListening));
+  ipcMain.handle('abs:play', resultHandler(absPlay));
+  ipcMain.handle('abs:sync', resultHandler(absSync));
   ipcMain.handle('shelfarr:test', resultHandler(testShelfarr));
   ipcMain.handle('shelfarr:requests', resultHandler(shelfarrBookRequests));
   ipcMain.handle('shelfarr:request', resultHandler(shelfarrRequestBook));

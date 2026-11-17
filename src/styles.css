@@ -1340,3 +1340,21 @@ html, body { background: #070707; }
 .invite-options label { display: flex; align-items: center; gap: 8px; color: #dcdce2; font: 500 13px 'Manrope', sans-serif; }
 .invite-result { display: grid; gap: 8px; justify-items: start; }
 .invite-result .welcome-code { width: 100%; }
+
+/* ---- Audiolivros (Audiobookshelf) ---- */
+.books-mode { margin: 18px 0 14px; }
+.abs-view .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.abs-search { width: 320px; max-width: 100%; }
+.abs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+.abs-shelf { display: grid; gap: 10px; margin-bottom: 22px; }
+.abs-row { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; }
+.abs-row .abs-card { flex: 0 0 150px; }
+.abs-card { display: grid; gap: 4px; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.abs-card:disabled { opacity: .6; cursor: progress; }
+.abs-cover { position: relative; display: block; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: #1b1b21; }
+.abs-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.abs-cover i { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); color: #fff; opacity: 0; transition: opacity .15s; }
+.abs-card:hover .abs-cover i, .abs-card:focus-visible .abs-cover i { opacity: 1; }
+.abs-card strong { color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abs-card small { color: #9b9ba5; font: 500 12px 'Manrope', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abs-setup { display: grid; gap: 12px; justify-items: start; }

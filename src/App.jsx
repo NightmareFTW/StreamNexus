@@ -3,6 +3,7 @@ import { BrandFlow, Icon, PosterCard, PreviewContext, ScrollRow, WatchContext } 
 import { AdultPlayer } from './AdultPlayer.jsx';
 import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
 import { InviteSettings, WelcomeScreen, welcomeDone } from './Invite.jsx';
+import { AudiobooksView, BooksModeSwitch } from './Audiobooks.jsx';
 import { EpisodePicker, HistoryPage } from './Watch.jsx';
 import { HomePage } from './Home.jsx';
 import { UpdateBanner, UpdateSettings } from './Update.jsx';
@@ -364,8 +365,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [rdSearch, setRdSearch] = useState(null);
   const [releaseSearch, setReleaseSearch] = useState(null);
   const [releaseBusyId, setReleaseBusyId] = useState('');
-  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
-  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
   const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info' });
   const setIntegrationTest = useCallback((text, kind = 'info') => setIntegrationTestState({ text, kind }), []);
   const [catalogTitles, setCatalogTitles] = useState(() => (profile.kids ? titles.filter(kidsAllowed) : titles));
@@ -1450,6 +1451,14 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     } catch (error) { notify(getError(error), 'error'); }
   };
   const rememberMusic = (index, position) => {
+    if (mini?.abs) {
+      if (!(position > 0)) return; // ainda não arrancou: não apagar o progresso guardado no servidor
+      const now = Date.now();
+      const listened = Math.max(0, Math.round((now - mini.abs.lastSync) / 1000));
+      mini.abs.lastSync = now;
+      window.streamnexus?.absSync?.({ sessionId: mini.abs.sessionId, currentTime: (mini.abs.offsets[index] || 0) + position, timeListened: Math.min(listened, 30), duration: mini.abs.duration }).catch(() => {});
+      return;
+    }
     if (!mini || mini.mode !== 'tracks' || !mini.albumMeta || !mini.tracks?.length) return;
     saveLastMusic({ mode: 'tracks', album: mini.albumMeta, tracks: mini.tracks.map(({ title, url, duration, source }) => ({ title, url, duration, source })), index, position: Math.floor(position), at: Date.now() });
   };
@@ -1458,7 +1467,19 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     if (lastMusic.mode === 'tracks') { recordMusic(lastMusic.album); setMini({ mode: 'tracks', key: `${lastMusic.album.id}-${Date.now()}`, tracks: lastMusic.tracks, index: lastMusic.index, title: lastMusic.album.title, cover: lastMusic.album.poster, albumMeta: lastMusic.album, startAt: lastMusic.position || 0 }); }
     else listenOnSpotify(lastMusic.album, { albumUri: lastMusic.uri, trackUri: lastMusic.trackUri });
   };
-  const showDiscover = activePage !== 'books' || booksView === 'discover';
+  const [booksMode, setBooksMode] = useState(() => { try { return localStorage.getItem(pkey('streamnexus.books.mode')) === 'audio' ? 'audio' : 'ebooks'; } catch { return 'ebooks'; } });
+  const changeBooksMode = (mode) => { setBooksMode(mode); try { localStorage.setItem(pkey('streamnexus.books.mode'), mode); } catch { /* só nesta sessão */ } };
+  const [absLoading, setAbsLoading] = useState('');
+  const playAudiobook = async (item) => {
+    setAbsLoading(item.id);
+    try {
+      const book = await window.streamnexus.absPlay({ itemId: item.id });
+      setMini({ mode: 'tracks', key: `abs-${item.id}-${Date.now()}`, tracks: book.tracks.map(({ title, url, duration }) => ({ title, url, duration })), index: book.index, title: book.title, cover: book.poster, startAt: book.startAt, abs: { sessionId: book.sessionId, itemId: book.itemId, duration: book.duration, offsets: book.tracks.map((track) => track.startOffset), lastSync: Date.now() } });
+    } catch (error) { notify(getError(error), 'error'); }
+    finally { setAbsLoading(''); }
+  };
+  const openIntegrations = () => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); };
+  const showDiscover = activePage !== 'books' || (booksMode === 'ebooks' && booksView === 'discover');
   const [reading, setReading] = useState(loadReading);
   const persistReading = (next) => {
     setReading(next);
@@ -1657,6 +1678,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         prowlarrApiKey: integrationForm.prowlarrApiKey.trim(),
         shelfarrUrl: (integrationForm.shelfarrUrl || '').trim().replace(/\/+$/, ''),
         shelfarrToken: (integrationForm.shelfarrToken || '').trim(),
+        audiobookshelfUrl: (integrationForm.audiobookshelfUrl || '').trim().replace(/\/+$/, ''),
+        audiobookshelfToken: (integrationForm.audiobookshelfToken || '').trim(),
         tmdbApiKey: integrationForm.tmdbApiKey.trim(),
         spotifyClientId: (integrationForm.spotifyClientId || '').trim(),
         spotifyClientSecret: (integrationForm.spotifyClientSecret || '').trim(),
@@ -1693,6 +1716,15 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       if (!window.streamnexus?.isDesktop) throw new Error('O teste do Shelfarr só funciona na app desktop.');
       await window.streamnexus.testShelfarr({ shelfarrUrl: (integrationForm.shelfarrUrl || '').trim(), shelfarrToken: (integrationForm.shelfarrToken || '').trim() });
       setIntegrationTest('Ligação concluída. O Shelfarr aceitou o token.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+  };
+
+  const testAudiobookshelf = async () => {
+    setIntegrationTest('A testar Audiobookshelf…');
+    try {
+      if (!window.streamnexus?.isDesktop) throw new Error('O teste do Audiobookshelf só funciona na app desktop.');
+      const result = await window.streamnexus.testAudiobookshelf({ audiobookshelfUrl: (integrationForm.audiobookshelfUrl || '').trim(), audiobookshelfToken: (integrationForm.audiobookshelfToken || '').trim() });
+      setIntegrationTest(result.libraries ? `Ligação concluída. ${result.libraries} biblioteca(s) de audiolivros: ${result.names.join(', ')}.` : 'Ligação concluída, mas não há bibliotecas de livros no servidor.', result.libraries ? 'success' : 'error');
     } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
@@ -1927,10 +1959,12 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         ) : activePage === 'adult' && adultEnabled && adultMode === 'videos' && !query ? (
           <AdultVideosPage mode={adultMode} onMode={setAdultMode} orientation={adultOrientation} onOrientation={changeAdultOrientation} state={adultVideos} category={adultCategory} onCategory={setAdultCategory} onPlay={(item) => setModal({ type: 'adultplay', item })} onRetry={() => loadAdultVideos('Todos', adultOrientation)}/>
         ) : activePage === 'home' && !query ? (
-          <HomePage profile={profile} profiles={profiles} kids={kids} prefs={prefs} rdStatus={{ connected: Boolean(session?.access_token), user: rdUser, count: rdItems.length, ready: readyTorrents.length }} onConnectRd={() => setModal({ type: 'connect' })} lastMusic={lastMusic} onResumeMusic={resumeMusic} watch={watch} saved={saved} savedItems={savedItems} reading={reading} trending={(catalogRows?.trending?.length ? catalogRows.trending : catalogTitles).filter((item) => item.poster && !item.adult)} taste={taste} onTaste={changeTaste} musicHistory={musicHistory} onOpen={(item) => openDetails(item)} onResume={(entry) => startPlayback(entry)} onPlayEpisode={(title, context) => startPlayback(title, context)} onToggleSave={toggleSaved} onNavigate={(page) => { setActivePage(page); setQuery(''); setGenre('Todos'); }}/>
+          <HomePage absConfigured={Boolean(integrationSettings.audiobookshelfUrl && integrationSettings.audiobookshelfToken)} onPlayAudiobook={playAudiobook} absLoading={absLoading} profile={profile} profiles={profiles} kids={kids} prefs={prefs} rdStatus={{ connected: Boolean(session?.access_token), user: rdUser, count: rdItems.length, ready: readyTorrents.length }} onConnectRd={() => setModal({ type: 'connect' })} lastMusic={lastMusic} onResumeMusic={resumeMusic} watch={watch} saved={saved} savedItems={savedItems} reading={reading} trending={(catalogRows?.trending?.length ? catalogRows.trending : catalogTitles).filter((item) => item.poster && !item.adult)} taste={taste} onTaste={changeTaste} musicHistory={musicHistory} onOpen={(item) => openDetails(item)} onResume={(entry) => startPlayback(entry)} onPlayEpisode={(title, context) => startPlayback(title, context)} onToggleSave={toggleSaved} onNavigate={(page) => { setActivePage(page); setQuery(''); setGenre('Todos'); }}/>
         ) : (['home', 'films', 'series', 'tv', 'music', 'books'].includes(activePage) || (activePage === 'adult' && adultEnabled)) && !query ? (
           <div className={`home-page page-in ${activePage !== 'home' ? 'catalog-browse-page' : ''} ${activePage === 'books' ? 'books-page' : ''}`}>
-            {activePage === 'books' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
+            {activePage === 'books' && <BooksModeSwitch mode={booksMode} onMode={changeBooksMode}/>}
+            {activePage === 'books' && booksMode === 'audio' && <AudiobooksView configured={Boolean(integrationSettings.audiobookshelfUrl && integrationSettings.audiobookshelfToken)} onPlay={playAudiobook} onConfigure={openIntegrations} playingId={absLoading}/>}
+            {activePage === 'books' && booksMode === 'ebooks' && <BooksNav view={booksView} onView={setBooksView} counts={{ shelf: Object.keys(reading.shelf).length, authors: new Set(Object.values(reading.shelf).map((entry) => entry.book.creator?.split(',')[0]?.trim() || '—')).size }}/>}
             {activePage === 'tv' && <TvModeTabs mode={tvMode} onMode={setTvMode}/>}
             {activePage === 'adult' && <AdultModeTabs mode={adultMode} onMode={setAdultMode}/>}
             {genre === 'Todos' && activePage !== 'books' && (!discoveryPage || discoveryItems.length > 0) && <section className={`hero ${isVideoTitle(featuredTitle) ? '' : 'hero-art'}`} style={{ backgroundImage: `linear-gradient(90deg, rgba(8,9,14,.97) 0%, rgba(8,9,14,.89) 29%, rgba(8,9,14,.45) 58%, rgba(8,9,14,.08) 100%), linear-gradient(0deg, rgba(9,10,15,1) 0%, rgba(9,10,15,0) 35%), url(${featuredTitle.backdrop})` }}>
@@ -1939,9 +1973,9 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
               <div className="hero-side-label"><span>{catalogStatus === 'ready' ? 'TENDÊNCIAS' : 'DESTAQUES'}</span><i></i><span>{featuredTitle.year || '2026'}</span></div>
             </section>}
 
-            {activePage === 'books' && booksView === 'dashboard' && <ReadingDashboard reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved} onGoal={setReadingGoal}/>}
-            {activePage === 'books' && booksView === 'discover' && <div className="section-heading rd-discover"><div><span className="eyebrow">NOVAS LEITURAS</span><h2>Descobrir livros</h2></div></div>}
-            {activePage === 'books' && !['dashboard', 'discover'].includes(booksView) && <BooksCollectionView view={booksView} reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved}/>}
+            {activePage === 'books' && booksMode === 'ebooks' && booksView === 'dashboard' && <ReadingDashboard reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved} onGoal={setReadingGoal}/>}
+            {activePage === 'books' && booksMode === 'ebooks' && booksView === 'discover' && <div className="section-heading rd-discover"><div><span className="eyebrow">NOVAS LEITURAS</span><h2>Descobrir livros</h2></div></div>}
+            {activePage === 'books' && booksMode === 'ebooks' && !['dashboard', 'discover'].includes(booksView) && <BooksCollectionView view={booksView} reading={reading} saved={saved} onOpen={openDetails} onSave={toggleSaved}/>}
             {activePage !== 'home' && showDiscover && <ScrollRow className="genre-chips" aria-label="Filtrar por género"><button className={genre === 'Todos' ? 'active' : ''} onClick={() => setGenre('Todos')}>Todos</button>{browseGenres.map((category) => <button key={category} className={genre === category ? 'active' : ''} onClick={() => setGenre(category)}>{category}</button>)}</ScrollRow>}
 
             {discoveryPage && showDiscover && discoveryItems.length === 0 && <div className="empty-list catalog-empty"><span>{discoveryState?.status === 'loading' || (!discoveryState && (!['tv', 'adult'].includes(activePage) || integrationSettings.tmdbApiKey)) ? <span className="spinner"></span> : <Icon name={discoveryState?.status === 'error' ? 'alert' : 'link'} size={22}/>}</span>
@@ -2047,6 +2081,12 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <label className="input-label" htmlFor="shelfarr-url">Endereço do Shelfarr</label><input id="shelfarr-url" className="text-input" type="url" placeholder="http://localhost:5056" value={integrationForm.shelfarrUrl || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="shelfarr-token">Token do Shelfarr</label><input id="shelfarr-token" className="text-input" type="password" autoComplete="off" placeholder="shf_…" value={integrationForm.shelfarrToken || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrToken: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testShelfarr}>Testar Shelfarr</button>
+
+            <div className="integration-group-title">Audiobookshelf (audiolivros)</div>
+            <small className="integration-help">O Audiobookshelf mostra e toca os audiolivros que estão nas pastas do teu servidor; não usa indexadores. O token copia-se na interface dele: Configuração &gt; Utilizadores &gt; a tua conta.</small>
+            <label className="input-label" htmlFor="abs-url">Endereço do Audiobookshelf</label><input id="abs-url" className="text-input" type="url" placeholder="http://100.x.y.z:13378" value={integrationForm.audiobookshelfUrl || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, audiobookshelfUrl: event.target.value }))}/>
+            <label className="input-label" htmlFor="abs-token">Token do Audiobookshelf</label><input id="abs-token" className="text-input" type="password" autoComplete="off" placeholder="Token / API key" value={integrationForm.audiobookshelfToken || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, audiobookshelfToken: event.target.value }))}/>
+            <button type="button" className="button button-quiet integration-test-button" onClick={testAudiobookshelf}>Testar Audiobookshelf</button>
 
             <div className="integration-group-title">TMDB</div>
             <small className="integration-help">Cria uma API key nas definições da conta TMDB. Esta ligação atualiza os títulos, imagens e tendências.</small>

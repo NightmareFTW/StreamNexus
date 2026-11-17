@@ -3,6 +3,7 @@ import { Icon, PosterCard, ScrollRow } from './ui.jsx';
 import { musicControls, useMusicState } from './musicStore.js';
 import { pkey } from './profiles.js';
 import { ProfileAvatar } from './Profiles.jsx';
+import { ContinueListening } from './Audiobooks.jsx';
 import { epKey, epLabel, loadProfileData, resumePointFor, watchInfo } from './watch.js';
 
 const GENRE_CHOICES = ['Ação', 'Aventura', 'Animação', 'Comédia', 'Crime', 'Documentário', 'Drama', 'Família', 'Fantasia', 'Ficção científica', 'Mistério', 'Romance', 'Terror', 'Thriller', 'Guerra', 'História', 'Música'];
@@ -35,7 +36,7 @@ async function cached(key, loader, ttl = 10 * 60 * 1000) {
 
 const seriesSnapshotFrom = (show, watch, savedItems) => watch[show.id] || savedItems[show.id] || { id: show.id, tmdbId: show.tmdbId, tmdbType: 'tv', type: 'Série', title: show.name, original: show.name, year: '', poster: show.poster, backdrop: show.backdrop, genre: '', genres: [] };
 
-export function HomePage({ profile, profiles = [], kids = false, prefs = {}, rdStatus = { connected: false }, onConnectRd, lastMusic, onResumeMusic, watch, saved, savedItems, reading, trending, taste, onTaste, musicHistory, onOpen, onResume, onPlayEpisode, onToggleSave, onNavigate }) {
+export function HomePage({ absConfigured = false, onPlayAudiobook, absLoading = '', profile, profiles = [], kids = false, prefs = {}, rdStatus = { connected: false }, onConnectRd, lastMusic, onResumeMusic, watch, saved, savedItems, reading, trending, taste, onTaste, musicHistory, onOpen, onResume, onPlayEpisode, onToggleSave, onNavigate }) {
   const [familyOpen, setFamilyOpen] = useState(false);
   const entries = useMemo(() => Object.values(watch).filter((entry) => !entry.adult).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), [watch]);
   const savedList = useMemo(() => Object.values(savedItems).filter((item) => !item.adult), [savedItems]);
@@ -261,6 +262,8 @@ export function HomePage({ profile, profiles = [], kids = false, prefs = {}, rdS
           {readingQueue.length > 0 && <div className="hub-queue"><h3>Sequência de leitura</h3><ol>{readingQueue.map((entry, index) => <li key={entry.book.id}><button onClick={() => onOpen(entry.book)}><span className="hub-queue-n">{index + 1}</span><span className="hub-queue-cover" style={entry.book.poster ? { backgroundImage: `url(${entry.book.poster})` } : undefined}></span><span><strong>{entry.book.title}</strong><small>{entry.book.creator}</small></span>{index === 0 && <em>A seguir</em>}</button></li>)}</ol></div>}
           {bookSuggestions.length > 0 && <div className="hub-rail"><h3>{bookGenres.length ? `Sugestões de leitura · ${bookGenres.join(' e ')}` : 'Para começar a ler'}</h3><ScrollRow className="poster-row">{bookSuggestions.map((item, index) => <PosterCard key={item.id} item={item} index={index} saved={false} hideSave onOpen={() => onOpen(item)}/>)}</ScrollRow></div>}
         </section>
+
+        {absConfigured && !kids && <ContinueListening onPlay={onPlayAudiobook} playingId={absLoading}/>}
 
         {trending.length > 0 && <section className="hub-section">
           <div className="hub-title"><h2>Em alta esta semana</h2></div>
