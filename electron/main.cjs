@@ -2079,8 +2079,14 @@ async function searchOpenSubtitles(value = {}) {
     if (value.tmdbType === 'tv') {
       params.set('parent_tmdb_id', String(value.tmdbId));
       params.set('type', 'episode');
-      const episode = String(value.query || '').match(/[Ss](\d{1,2})[ ._-]?[Ee](\d{1,2})/);
-      if (episode) { params.set('season_number', String(Number(episode[1]))); params.set('episode_number', String(Number(episode[2]))); }
+      // Temporada e episódio vêm do estado do leitor; o nome do ficheiro (S01E02) serve de recurso.
+      const fromName = String(value.query || '').match(/[Ss](\d{1,2})[ ._-]?[Ee](\d{1,2})|(\d{1,2})x(\d{2})/);
+      const season = Number(value.season) || Number(fromName?.[1] || fromName?.[3]) || 0;
+      const episode = Number(value.episode) || Number(fromName?.[2] || fromName?.[4]) || 0;
+      if (season) params.set('season_number', String(season));
+      if (episode) params.set('episode_number', String(episode));
+      // Com temporada e episódio certos, o nome do ficheiro só atrapalha a pesquisa.
+      if (season && episode) value = { ...value, query: '' };
     } else {
       params.set('tmdb_id', String(value.tmdbId));
       params.set('type', 'movie');
@@ -2426,6 +2432,7 @@ const INVITE_GROUPS = {
   prowlarr: ['prowlarrUrl', 'prowlarrApiKey'],
   shelfarr: ['shelfarrUrl'],
   shelfarrToken: ['shelfarrToken'],
+  spotify: ['spotifyClientId', 'spotifyClientSecret'],
 };
 function inviteKey(pin, salt) { return crypto.scryptSync(String(pin), salt, 32); }
 
@@ -2465,7 +2472,7 @@ async function importInvite({ code, pin } = {}) {
   }
   if (!applied.length) throw new Error('O convite não trazia nenhuma definição.');
   await writeIntegrations(current);
-  return { applied, tmdb: applied.includes('tmdbApiKey'), prowlarr: applied.includes('prowlarrUrl'), shelfarr: applied.includes('shelfarrUrl'), settings: await readIntegrations() };
+  return { applied, tmdb: applied.includes('tmdbApiKey'), prowlarr: applied.includes('prowlarrUrl'), shelfarr: applied.includes('shelfarrUrl'), spotify: applied.includes('spotifyClientId'), settings: await readIntegrations() };
 }
 
 async function fetchReleaseMagnet(entry) {

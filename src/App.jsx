@@ -1149,7 +1149,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     } catch (error) { setRdError(getError(error)); }
   };
 
-  const findSubtitles = async (title, fileName = '') => {
+  const findSubtitles = async (title, fileName = '', episode = null) => {
     setSubtitleResults([]);
     setSubtitleError('');
     setSubtitleStatus('loading');
@@ -1159,6 +1159,9 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         tmdbId: title?.tmdbId,
         tmdbType: title?.tmdbType,
         query: fileName || title?.original || title?.title || '',
+        titleQuery: title?.original || title?.title || '',
+        season: episode?.season,
+        episode: episode?.episode,
       });
       setSubtitleResults(results);
       setSubtitleStatus(results.length ? 'found' : 'empty');
@@ -1167,6 +1170,29 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       setSubtitleStatus('error');
     }
   };
+
+  // Nova reprodução: esquece a legenda, a lista e a pesquisa do título anterior.
+  const subtitleSearchKey = useRef('');
+  const resetSubtitles = () => {
+    subtitleSearchKey.current = '';
+    setSubtitleTrackUrl('');
+    setSubtitleLabel('');
+    setActiveSubId('');
+    setSubtitleResults([]);
+    setSubtitleError('');
+    setSubtitleStatus('idle');
+    setDownloadedSubs([]);
+    subtitleVtt.current.clear();
+  };
+
+  // Procura as legendas assim que há vídeo, também no "Ver agora" e nos episódios.
+  useEffect(() => {
+    if (!playing?.url || playing.live || !playing.metadata?.id) return;
+    const key = `${playing.metadata.id}|${playing.episode?.season ?? ''}x${playing.episode?.episode ?? ''}`;
+    if (subtitleSearchKey.current === key) return;
+    subtitleSearchKey.current = key;
+    findSubtitles(playing.metadata, playing.fileName, playing.episode);
+  }, [playing?.url, playing?.metadata?.id, playing?.episode?.season, playing?.episode?.episode]);
 
   const activateSubtitle = (entry) => {
     setSubtitleTrackUrl(entry.url);
@@ -1250,13 +1276,10 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       setEmbeddedSubtitleTracks([]);
       setActiveEmbeddedTrack(null);
       setPlayerPlaybackError('');
-      setSubtitleLabel('');
-      setSubtitleTrackUrl('');
-      setActiveSubId('');
+      resetSubtitles();
       setTrailerPlaying(false);
       setPlaying({ title: ctx.episode ? `${title.title} · ${epLabel(ctx.episode.season, ctx.episode.episode)}` : title.title || fileName, ...playbackStream, pending: !streamUrl, progress: Number(details.progress || 0), transferStatus: details.status, torrentId: torrent.id, metadata: title, fileName, episode: ctx.episode || null, resumeAt: ctx.resumeAt || 0 });
       setModal({ type: 'player' });
-      findSubtitles(title, fileName);
       if (!streamUrl) notify('A reprodução abriu. Vai começar assim que o Real-Debrid disponibilizar um link de vídeo.', 'info');
     } catch (error) { setRdError(getError(error)); notify(getError(error), 'error'); }
   };
@@ -1754,9 +1777,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     setEmbeddedSubtitleTracks([]);
     setActiveEmbeddedTrack(null);
     setPlayerPlaybackError('');
-    setSubtitleLabel('');
-    setSubtitleTrackUrl('');
-    setActiveSubId('');
+    resetSubtitles();
     setTrailerPlaying(false);
     setPlaying({ title: ctx.episode ? `${title.title} · ${epLabel(ctx.episode.season, ctx.episode.episode)}` : title.title, url: '', pending: true, phase: 'searching', progress: 0, metadata: title, fileName: title.title, torrentId: '', runId, episode: ctx.episode || null, resumeAt: ctx.resumeAt || 0 });
     setModal({ type: 'player' });
@@ -2084,7 +2105,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             </div>
 
             {subtitleMenuOpen && <section className="subtitle-panel">
-              <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
+              <div className="subtitle-panel-head"><div><span className="eyebrow">LEGENDAS</span><strong>{activeEmbeddedTrack ? `${activeEmbeddedTrack.label || activeEmbeddedTrack.language || 'Legendas'} · Original do ficheiro` : subtitleLabel || 'Português de Portugal'}</strong></div><button className="button button-quiet button-sm" onClick={() => findSubtitles(playing?.metadata, playing?.fileName, playing?.episode)} disabled={subtitleStatus === 'loading' || subtitleStatus === 'downloading'}><Icon name="refresh" size={13}/>{subtitleStatus === 'loading' ? 'A procurar…' : 'Procurar'}</button></div>
               {embeddedSubtitleTracks.length > 0 && <div className="embedded-subtitles"><span>Legendas originais do ficheiro</span><div><button className={!activeEmbeddedTrack && !subtitleTrackUrl ? 'active' : ''} onClick={disableSubtitles}>Desligadas</button>{embeddedSubtitleTracks.map((track, index) => <button key={`${track.language}-${track.label}-${index}`} className={activeEmbeddedTrack === track ? 'active' : ''} onClick={() => selectEmbeddedSubtitle(track)}>{track.label || track.language || `Faixa ${index + 1}`} <small>Original</small></button>)}</div></div>}
               {embeddedSubtitleTracks.length === 0 && /\b(subs?|subtitles?|legendas?)\b/i.test(playing?.fileName || '') && <p className="subtitle-message">O leitor web não expôs as legendas embutidas neste ficheiro. Podes selecioná-las ao abrir com VLC.</p>}
               {subtitleStatus === 'loading' && <p className="subtitle-message"><span className="spinner"></span>A procurar legendas em PT-PT e PT-BR…</p>}
