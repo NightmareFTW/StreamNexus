@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, session, shell, components } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, session, shell, components, net: electronNet } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -6,6 +6,25 @@ const fsSync = require('node:fs');
 const { randomUUID, createHash } = require('node:crypto');
 const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
+
+// O fetch do Node (undici) falha com "fetch failed" / UND_ERR_CONNECT_TIMEOUT em redes com VPN ou DNS especiais,
+// onde o browser funciona. Os pedidos externos passam primeiro pela rede do Chromium (a mesma do browser, com o DNS e
+// o proxy do sistema) e só se essa falhar é que se tenta o fetch do Node. Pedidos locais e com cabeçalhos
+// que o Chromium controla (Referer, Cookie, Range…) continuam no fetch do Node.
+const nodeFetch = globalThis.fetch;
+const CHROMIUM_CONTROLLED_HEADERS = /^(referer|cookie|range|origin|if-range|if-none-match|if-modified-since)$/i;
+globalThis.fetch = async function streamNexusFetch(input, init = {}) {
+  try {
+    const url = new URL(input instanceof URL ? input.href : typeof input === 'string' ? input : input.url);
+    const names = init.headers ? (init.headers instanceof Headers ? [...init.headers.keys()] : Object.keys(init.headers)) : [];
+    const local = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+    if (!app.isReady() || local || !['http:', 'https:'].includes(url.protocol) || names.some((name) => CHROMIUM_CONTROLLED_HEADERS.test(name)) || (init.body && typeof init.body !== 'string')) return await nodeFetch(input, init);
+    return await electronNet.fetch(url.href, { ...init, credentials: init.credentials || 'omit' });
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || init.signal?.aborted) throw error;
+    return nodeFetch(input, init);
+  }
+};
 const dns = require('node:dns/promises');
 const net = require('node:net');
 const http = require('node:http');
