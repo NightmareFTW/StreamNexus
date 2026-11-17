@@ -325,7 +325,7 @@ function formatDate(dateString) {
 // Ao mudar de faixa de áudio (ou qualidade) o fluxo recomeça a meio do filme: o relógio do vídeo volta a 0, mas a legenda
 // está em tempo absoluto. Desloca os tempos da legenda para coincidirem com o novo fluxo.
 function shiftVtt(vtt, offsetSeconds) {
-  if (!(offsetSeconds > 0)) return vtt;
+  if (!offsetSeconds) return vtt;
   const parse = (text) => { const parts = text.split(':').map(Number); const [h, m, sec] = parts.length === 3 ? parts : [0, parts[0], parts[1]]; return h * 3600 + m * 60 + sec; };
   const format = (total) => { const t = Math.max(0, total); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const sec = t - h * 3600 - m * 60; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${sec.toFixed(3).padStart(6, '0')}`; };
   return vtt.split(/\n{2,}/).map((block) => {
@@ -336,6 +336,8 @@ function shiftVtt(vtt, offsetSeconds) {
     return block.replace(match[0], `${format(parse(match[1]) - offsetSeconds)} --> ${format(end)}`);
   }).filter((block) => block !== null).join('\n\n');
 }
+
+const fmtClock = (seconds) => { const total = Math.max(0, Math.round(Number(seconds) || 0)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const sec = total % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
 
 function getError(error) {
   if (error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')) return 'Não foi possível ligar à API. Verifica a ligação à internet.';
@@ -382,6 +384,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [subtitleError, setSubtitleError] = useState('');
   const [subtitleTrackUrl, setSubtitleTrackUrl] = useState('');
   const subtitleVtt = useRef(new Map());
+  const [subtitleDelay, setSubtitleDelay] = useState(0);
+  const [subtitleInfo, setSubtitleInfo] = useState(null);
   const [subtitleShownUrl, setSubtitleShownUrl] = useState('');
   const [downloadedSubs, setDownloadedSubs] = useState([]);
   const [activeSubId, setActiveSubId] = useState('');
@@ -555,13 +559,14 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   useEffect(() => { setHeroIndex(0); }, [activePage]);
 
   useEffect(() => {
-    const offset = playing?.offset || 0;
+    const shift = (playing?.offset || 0) - subtitleDelay;
     const raw = subtitleVtt.current.get(subtitleTrackUrl);
-    if (!subtitleTrackUrl || !raw || !(offset > 0)) { setSubtitleShownUrl(subtitleTrackUrl); return undefined; }
-    const shifted = URL.createObjectURL(new Blob([shiftVtt(raw, offset)], { type: 'text/vtt;charset=utf-8' }));
+    setSubtitleInfo(null);
+    if (!subtitleTrackUrl || !raw || !shift) { setSubtitleShownUrl(subtitleTrackUrl); return undefined; }
+    const shifted = URL.createObjectURL(new Blob([shiftVtt(raw, shift)], { type: 'text/vtt;charset=utf-8' }));
     setSubtitleShownUrl(shifted);
     return () => URL.revokeObjectURL(shifted);
-  }, [subtitleTrackUrl, playing?.offset]);
+  }, [subtitleTrackUrl, playing?.offset, subtitleDelay]);
 
   useEffect(() => {
     if (!subtitleShownUrl) return undefined;
@@ -1184,6 +1189,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
     setSubtitleStatus('idle');
     setDownloadedSubs([]);
     subtitleVtt.current.clear();
+    setSubtitleDelay(0);
+    setSubtitleInfo(null);
   };
 
   // Procura as legendas assim que há vídeo, também no "Ver agora" e nos episódios.
@@ -2132,7 +2139,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
 
         {modal.type === 'player' && <div className={`player-modal modal-card ${playerControlsVisible ? '' : 'controls-hidden'} ${playing?.url ? '' : 'is-preparing'}`} onMouseMove={revealPlayerControls} onTouchStart={revealPlayerControls}>
           <div className="player-frame">
-            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleShownUrl && <track key={subtitleShownUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleShownUrl} default/>}</video>}
+            {playing?.url && <video ref={playerVideoRef} autoPlay playsInline preload="auto" src={playing.hls ? undefined : playing.url} onClick={togglePlayerPlayback} onError={handleVideoError} onEnded={handleVideoEnded}>{subtitleShownUrl && <track key={subtitleShownUrl} kind="subtitles" srcLang={subtitleLanguage} label={subtitleLabel} src={subtitleShownUrl} default onLoad={(event) => { const track = event.currentTarget.track; const cues = Array.from(track?.cues || []); setSubtitleInfo({ cues: cues.length, first: cues[0]?.startTime ?? 0, last: cues.length ? cues[cues.length - 1].endTime : 0, mode: track?.mode || '' }); }} onError={() => setSubtitleInfo({ error: true })}/>}</video>}
             {playerPlaybackError && <div className="player-playback-error"><strong>{playerPlaybackError}</strong><span>{playing?.live ? 'Esta emissão pode estar offline ou bloqueada.' : 'Confirma a ligação ou tenta abrir o ficheiro original.'}</span>{playing?.live && playing.live.channel.streams.length > 1 && <button className="button button-primary button-sm" onClick={() => playLiveChannel(playing.live.channel, (playing.live.index + 1) % playing.live.channel.streams.length)}><Icon name="refresh" size={13}/>Tentar outra emissão</button>}{window.streamnexus?.isDesktop && playing?.sourceUrl && !playing.transcoded && <button className="button button-primary button-sm" onClick={retryWithVideoConversion}><Icon name="refresh" size={13}/>Converter vídeo e reproduzir</button>}{playing?.sourceUrl && !playing?.live && <button className="button button-quiet button-sm" onClick={async () => { try { await window.streamnexus.openExternalPlayer(playing.sourceUrl); } catch (error) { setPlayerPlaybackError(getError(error)); } }}><Icon name="external" size={13}/>Abrir com VLC</button>}</div>}
             {playing?.nextEpisode && <div className="next-episode-card"><span className="eyebrow">A SEGUIR</span><strong>{epLabel(playing.nextEpisode.season, playing.nextEpisode.episode)}{playing.nextEpisode.name ? ` · ${playing.nextEpisode.name}` : ''}</strong>{nextCountdown !== null && <small className="next-episode-count">A reproduzir automaticamente em {Math.max(0, nextCountdown)} s</small>}<div><button className="button button-primary button-sm" onClick={() => startPlayback(playing.metadata, { episode: playing.nextEpisode, resumeAt: 0 })}><Icon name="play" size={14}/>Reproduzir</button><button className="button button-quiet button-sm" onClick={() => setPlaying((current) => (current ? { ...current, nextEpisode: null } : current))}>Agora não</button></div></div>}
             {slowConnection && !slowDismissed && !playerPlaybackError && playing?.url && !playing.live && playing.quality !== '720' && <div className="player-slow-banner"><strong>A ligação parece lenta</strong><span>O vídeo está a fazer pausas para carregar. Converter para uma qualidade menor reduz o débito necessário.</span><div>{playing.quality !== '1080' && <button className="button button-primary button-sm" onClick={() => changeQuality('1080')}>Converter para 1080p</button>}<button className="button button-primary button-sm" onClick={() => changeQuality('720')}>720p</button><button className="button button-quiet button-sm" onClick={() => setSlowDismissed(true)}>Agora não</button></div></div>}
@@ -2153,6 +2160,10 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
               {subtitleStatus === 'error' && <p className="subtitle-message is-error">{subtitleError}<button className="text-link" onClick={() => { setIntegrationForm(integrationSettings); setIntegrationTest(''); setModal({ type: 'integrations' }); }}>Configurar OpenSubtitles</button></p>}
               {subtitleStatus === 'empty' && <p className="subtitle-message">Não foram encontradas legendas em português para este título.</p>}
               {subtitleStatus === 'selected' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>Legenda transferida e ativa no vídeo.</p>}
+              {subtitleStatus === 'selected' && <div className="subtitle-diag">
+                <small>{subtitleInfo?.error ? 'Não foi possível ler o ficheiro da legenda.' : subtitleInfo ? (subtitleInfo.cues ? `${subtitleInfo.cues} falas · de ${fmtClock(subtitleInfo.first)} a ${fmtClock(subtitleInfo.last)} · vídeo com ${fmtClock((playing?.totalDuration || playerVideoRef.current?.duration || 0))}` : 'A legenda foi lida, mas não tem falas.') : 'A ler a legenda…'}</small>
+                <span className="subtitle-delay"><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value - 0.5) * 10) / 10)}>−0,5 s</button><em>{subtitleDelay > 0 ? '+' : ''}{String(subtitleDelay).replace('.', ',')} s</em><button className="button button-quiet button-sm" onClick={() => setSubtitleDelay((value) => Math.round((value + 0.5) * 10) / 10)}>+0,5 s</button></span>
+              </div>}
               {subtitleStatus === 'original' && <p className="subtitle-message is-ready"><Icon name="check" size={14}/>A usar as legendas originais incorporadas neste ficheiro.</p>}
               {playing?.pending && <p className="subtitle-message">As legendas ficam disponíveis assim que o Real-Debrid entregar o vídeo.</p>}
               {downloadedSubs.some((entry) => entry.forFile === (playing?.fileName || '')) && <div className="embedded-subtitles"><span>Legendas transferidas</span><div><button className={!subtitleTrackUrl && !activeEmbeddedTrack ? 'active' : ''} onClick={disableSubtitles}>Desligadas</button>{downloadedSubs.filter((entry) => entry.forFile === (playing?.fileName || '')).map((entry) => <button key={entry.fileId} className={activeSubId === entry.fileId ? 'active' : ''} onClick={() => activateSubtitle(entry)}>{entry.label} <small>{entry.language === 'pt-PT' ? 'PT-PT' : 'PT-BR'}{entry.release ? ` · ${entry.release.slice(0, 26)}` : ''}</small></button>)}</div></div>}

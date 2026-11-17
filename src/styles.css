@@ -1358,3 +1358,8 @@ html, body { background: #070707; }
 .abs-card strong { color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .abs-card small { color: #9b9ba5; font: 500 12px 'Manrope', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .abs-setup { display: grid; gap: 12px; justify-items: start; }
+
+.subtitle-diag { display: grid; gap: 6px; margin-top: 6px; }
+.subtitle-diag small { color: #9b9ba5; font: 500 11px/1.4 'Manrope', sans-serif; }
+.subtitle-delay { display: inline-flex; align-items: center; gap: 8px; }
+.subtitle-delay em { min-width: 56px; text-align: center; font-style: normal; color: #f1f1f4; font: 600 12px 'Manrope', sans-serif; }
