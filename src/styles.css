@@ -1324,3 +1324,19 @@ html, body { background: #070707; }
 
 /* a faixa de atualização fica em baixo à esquerda para não tapar menus nem avisos */
 .update-banner { top: auto; right: auto; bottom: 64px; left: 24px; }
+
+/* ---- Convite e boas-vindas ---- */
+.welcome-card { max-width: 560px; width: 100%; display: grid; gap: 14px; text-align: left; }
+.welcome-card h1 { margin: 0; }
+.welcome-note { margin: 0; color: #b3b3bc; font: 500 14px/1.5 'Manrope', sans-serif; }
+.welcome-foot { font-size: 12px; color: #8d8d97; }
+.welcome-form { display: grid; gap: 8px; width: 100%; justify-items: stretch; }
+.welcome-form .text-input { width: 100%; box-sizing: border-box; }
+.welcome-code { font: 500 12px/1.4 ui-monospace, Consolas, monospace; resize: vertical; word-break: break-all; }
+.welcome-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.welcome-list li { display: flex; align-items: center; gap: 8px; color: #f1f1f4; font: 600 14px 'Manrope', sans-serif; }
+.invite-settings { display: grid; gap: 8px; margin-top: 18px; }
+.invite-options { display: grid; gap: 6px; margin: 4px 0; }
+.invite-options label { display: flex; align-items: center; gap: 8px; color: #dcdce2; font: 500 13px 'Manrope', sans-serif; }
+.invite-result { display: grid; gap: 8px; justify-items: start; }
+.invite-result .welcome-code { width: 100%; }

@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   fetchHomeMovies: (value) => invokeRequest('home:movies', value),
   fetchHomeRecommendations: (value) => invokeRequest('home:recommend', value),
   testProwlarr: (value) => invokeRequest('prowlarr:test', value),
+  createInvite: (value) => invokeRequest('invite:create', value),
+  importInvite: (value) => invokeRequest('invite:import', value),
   testShelfarr: (value) => invokeRequest('shelfarr:test', value),
   shelfarrRequests: (value) => invokeRequest('shelfarr:requests', value),
   shelfarrRequestBook: (value) => invokeRequest('shelfarr:request', value),

@@ -4,6 +4,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const fsSync = require('node:fs');
 const { randomUUID, createHash } = require('node:crypto');
+const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const dns = require('node:dns/promises');
 const net = require('node:net');
@@ -2410,6 +2411,55 @@ async function shelfarrRequestBook({ title, author, year, bookType } = {}) {
   return { requests: (created.requests || []).map(shelfarrRequestInfo), warnings: created.warnings || [], title: match.title || title };
 }
 
+// ---- Convite para a família: um código cifrado com um PIN que leva as integrações escolhidas para outra instalação ----
+const INVITE_PREFIX = 'SN1.';
+const INVITE_GROUPS = {
+  tmdb: ['tmdbApiKey'],
+  prowlarr: ['prowlarrUrl', 'prowlarrApiKey'],
+  shelfarr: ['shelfarrUrl'],
+  shelfarrToken: ['shelfarrToken'],
+};
+function inviteKey(pin, salt) { return crypto.scryptSync(String(pin), salt, 32); }
+
+async function createInvite({ include = {}, pin } = {}) {
+  if (String(pin || '').length < 4) throw new Error('O PIN do convite precisa de pelo menos 4 caracteres.');
+  const settings = await readIntegrations();
+  const payload = {};
+  for (const [group, fields] of Object.entries(INVITE_GROUPS)) {
+    if (!include[group]) continue;
+    for (const field of fields) if (settings[field]) payload[field] = settings[field];
+  }
+  if (!Object.keys(payload).length) throw new Error('Não há nada para partilhar. Preenche primeiro as integrações e escolhe o que incluir.');
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', inviteKey(pin, salt), iv);
+  const data = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+  const packed = Buffer.concat([salt, iv, cipher.getAuthTag(), data]);
+  return { code: INVITE_PREFIX + packed.toString('base64url'), fields: Object.keys(payload).length };
+}
+
+async function importInvite({ code, pin } = {}) {
+  const text = String(code || '').trim().replace(/\s+/g, '');
+  if (!text.startsWith(INVITE_PREFIX)) throw new Error('Este código de convite não é válido.');
+  const packed = Buffer.from(text.slice(INVITE_PREFIX.length), 'base64url');
+  if (packed.length < 16 + 12 + 16 + 2) throw new Error('Este código de convite está incompleto. Copia-o por inteiro.');
+  let payload;
+  try {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', inviteKey(pin, packed.subarray(0, 16)), packed.subarray(16, 28));
+    decipher.setAuthTag(packed.subarray(28, 44));
+    payload = JSON.parse(Buffer.concat([decipher.update(packed.subarray(44)), decipher.final()]).toString('utf8'));
+  } catch { throw new Error('PIN errado ou código danificado.'); }
+  const allowed = new Set(Object.values(INVITE_GROUPS).flat());
+  const current = await readIntegrations();
+  const applied = [];
+  for (const [field, value] of Object.entries(payload)) {
+    if (allowed.has(field) && typeof value === 'string' && value) { current[field] = value; applied.push(field); }
+  }
+  if (!applied.length) throw new Error('O convite não trazia nenhuma definição.');
+  await writeIntegrations(current);
+  return { applied, tmdb: applied.includes('tmdbApiKey'), prowlarr: applied.includes('prowlarrUrl'), shelfarr: applied.includes('shelfarrUrl'), settings: await readIntegrations() };
+}
+
 async function fetchReleaseMagnet(entry) {
   const { release, baseUrl, apiKey } = entry;
   const magnet = releaseMagnet(release);
@@ -2669,6 +2719,8 @@ function registerIpc() {
   ipcMain.handle('integrations:write', (_event, value) => writeIntegrations(value));
   ipcMain.handle('prowlarr:search', resultHandler(searchProwlarr));
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
+  ipcMain.handle('invite:create', resultHandler(createInvite));
+  ipcMain.handle('invite:import', resultHandler(importInvite));
   ipcMain.handle('shelfarr:test', resultHandler(testShelfarr));
   ipcMain.handle('shelfarr:requests', resultHandler(shelfarrBookRequests));
   ipcMain.handle('shelfarr:request', resultHandler(shelfarrRequestBook));

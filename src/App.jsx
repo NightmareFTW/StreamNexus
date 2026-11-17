@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrandFlow, Icon, PosterCard, PreviewContext, ScrollRow, WatchContext } from './ui.jsx';
 import { AdultPlayer } from './AdultPlayer.jsx';
 import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
+import { InviteSettings, WelcomeScreen, welcomeDone } from './Invite.jsx';
 import { EpisodePicker, HistoryPage } from './Watch.jsx';
 import { HomePage } from './Home.jsx';
 import { UpdateBanner, UpdateSettings } from './Update.jsx';
@@ -1982,6 +1983,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
           <button className="modal-close" aria-label="Fechar" onClick={() => setModal(null)}><Icon name="close"/></button>
           <div className="modal-emblem magnet-emblem"><Icon name="settings" size={23}/></div><span className="eyebrow">CATÁLOGO, PESQUISA E LEGENDAS</span><h2>Integrações</h2>
           <UpdateSettings onNotify={notify}/>
+          <InviteSettings onNotify={notify}/>
           <p className="connect-lead">Liga o Prowlarr para pesquisar fontes, o TMDB para atualizar tendências e estreias, e o OpenSubtitles para procurar legendas. A preferência de legendas é português de Portugal.</p>
           <form onSubmit={saveIntegrationSettings} className="integration-form">
             <div className="integration-group-title">Prowlarr</div>
@@ -2150,6 +2152,15 @@ export default function App() {
   const [activeId, setActiveId] = useState(() => { const list = loadProfiles(); return list.length > 1 ? null : list[0].id; });
   const [previousId, setPreviousId] = useState('');
   const [managing, setManaging] = useState(false);
+  // Primeiro arranque na app desktop, sem nada configurado: pede o código de convite.
+  const [welcome, setWelcome] = useState(() => (window.streamnexus?.isDesktop && !welcomeDone() ? 'checking' : 'no'));
+  useEffect(() => {
+    if (welcome !== 'checking') return;
+    window.streamnexus.loadIntegrations()
+      .then((settings) => setWelcome(settings.tmdbApiKey || settings.prowlarrUrl ? 'no' : 'show'), () => setWelcome('no'));
+  }, [welcome]);
+  if (welcome === 'checking') return null;
+  if (welcome === 'show') return <WelcomeScreen onDone={() => setWelcome('no')}/>;
   if (!activeId) {
     return <ProfileGate key={managing ? 'manage' : 'choose'} profiles={profiles} onProfiles={setProfiles} startManaging={managing} canCancel={Boolean(previousId && profiles.some((profile) => profile.id === previousId))} onCancel={() => { setManaging(false); setActiveId(previousId); }} onChoose={(id) => { setManaging(false); setActiveProfile(id); setActiveId(id); }}/>;
   }
