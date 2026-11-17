@@ -369,8 +369,10 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [releaseBusyId, setReleaseBusyId] = useState('');
   const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
   const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', audiobookshelfUrl: '', audiobookshelfToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
-  const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info' });
-  const setIntegrationTest = useCallback((text, kind = 'info') => setIntegrationTestState({ text, kind }), []);
+  const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info', section: '' });
+  const setIntegrationTest = useCallback((text, kind = 'info', section = '') => setIntegrationTestState({ text, kind, section }), []);
+  const setSectionTest = (section) => (text, kind = 'info') => setIntegrationTest(text, kind, section);
+  const sectionTestLine = (section) => (integrationTestState.section === section && integrationTestState.text ? <div className="integration-test-line"><span className={`is-${integrationTestState.kind}`}>{integrationTestState.text}</span></div> : null);
   const [catalogTitles, setCatalogTitles] = useState(() => (profile.kids ? titles.filter(kidsAllowed) : titles));
   const [catalogRows, setCatalogRows] = useState(null);
   const [catalogStatus, setCatalogStatus] = useState('sample');
@@ -1703,7 +1705,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   };
 
   const testProwlarr = async () => {
-    setIntegrationTest('A testar ligação…');
+    setSectionTest('prowlarr')('A testar ligação…');
     try {
       const base = integrationForm.prowlarrUrl.trim().replace(/\/+$/, '');
       if (!base || !integrationForm.prowlarrApiKey.trim()) throw new Error('Preenche o endereço e a API key.');
@@ -1713,51 +1715,51 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         const response = await fetch(`${base}/api/v1/system/status`, { headers: { 'X-Api-Key': integrationForm.prowlarrApiKey.trim() } });
         if (!response.ok) throw new Error(`Prowlarr respondeu com erro ${response.status}.`);
       }
-      setIntegrationTest('Ligação concluída. Prowlarr está acessível.', 'success');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('prowlarr')('Ligação concluída. Prowlarr está acessível.', 'success');
+    } catch (error) { setSectionTest('prowlarr')(getError(error), 'error'); }
   };
 
   const testShelfarr = async () => {
-    setIntegrationTest('A testar Shelfarr…');
+    setSectionTest('shelfarr')('A testar Shelfarr…');
     try {
       if (!window.streamnexus?.isDesktop) throw new Error('O teste do Shelfarr só funciona na app desktop.');
       await window.streamnexus.testShelfarr({ shelfarrUrl: (integrationForm.shelfarrUrl || '').trim(), shelfarrToken: (integrationForm.shelfarrToken || '').trim() });
-      setIntegrationTest('Ligação concluída. O Shelfarr aceitou o token.', 'success');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('shelfarr')('Ligação concluída. O Shelfarr aceitou o token.', 'success');
+    } catch (error) { setSectionTest('shelfarr')(getError(error), 'error'); }
   };
 
   const testAudiobookshelf = async () => {
-    setIntegrationTest('A testar Audiobookshelf…');
+    setSectionTest('audiobookshelf')('A testar Audiobookshelf…');
     try {
       if (!window.streamnexus?.isDesktop) throw new Error('O teste do Audiobookshelf só funciona na app desktop.');
       const result = await window.streamnexus.testAudiobookshelf({ audiobookshelfUrl: (integrationForm.audiobookshelfUrl || '').trim(), audiobookshelfToken: (integrationForm.audiobookshelfToken || '').trim() });
-      setIntegrationTest(result.libraries ? `Ligação concluída. ${result.libraries} biblioteca(s) de audiolivros: ${result.names.join(', ')}.` : 'Ligação concluída, mas não há bibliotecas de livros no servidor.', result.libraries ? 'success' : 'error');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('audiobookshelf')(result.libraries ? `Ligação concluída. ${result.libraries} biblioteca(s) de audiolivros: ${result.names.join(', ')}.` : 'Ligação concluída, mas não há bibliotecas de livros no servidor.', result.libraries ? 'success' : 'error');
+    } catch (error) { setSectionTest('audiobookshelf')(getError(error), 'error'); }
   };
 
   const testTmdb = async () => {
-    setIntegrationTest('A testar TMDB…');
+    setSectionTest('tmdb')('A testar TMDB…');
     try {
       if (!integrationForm.tmdbApiKey.trim()) throw new Error('Preenche a API key do TMDB.');
       if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
       await window.streamnexus.testTmdb({ tmdbApiKey: integrationForm.tmdbApiKey.trim() });
-      setIntegrationTest('TMDB ligado. O catálogo será atualizado ao guardar.', 'success');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('tmdb')('TMDB ligado. O catálogo será atualizado ao guardar.', 'success');
+    } catch (error) { setSectionTest('tmdb')(getError(error), 'error'); }
   };
 
   const testSpotify = async () => {
-    setIntegrationTest('A testar Spotify…');
+    setSectionTest('spotify')('A testar Spotify…');
     try {
       const credentials = { spotifyClientId: (integrationForm.spotifyClientId || '').trim(), spotifyClientSecret: (integrationForm.spotifyClientSecret || '').trim() };
       if (!credentials.spotifyClientId || !credentials.spotifyClientSecret) throw new Error('Preenche o Client ID e o Client Secret do Spotify.');
       if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
       await window.streamnexus.testSpotify(credentials);
-      setIntegrationTest('Spotify ligado. A aba Música passa a usar o catálogo do Spotify.', 'success');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('spotify')('Spotify ligado. A aba Música passa a usar o catálogo do Spotify.', 'success');
+    } catch (error) { setSectionTest('spotify')(getError(error), 'error'); }
   };
 
   const testOpenSubtitles = async () => {
-    setIntegrationTest('A testar OpenSubtitles…');
+    setSectionTest('opensubtitles')('A testar OpenSubtitles…');
     try {
       const credentials = {
         openSubtitlesApiKey: integrationForm.openSubtitlesApiKey.trim(),
@@ -1767,8 +1769,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       if (Object.values(credentials).some((value) => !value)) throw new Error('Preenche a API key, o utilizador e a palavra-passe do OpenSubtitles.');
       if (!window.streamnexus?.isDesktop) throw new Error('Testa esta ligação na app desktop.');
       await window.streamnexus.testOpenSubtitles(credentials);
-      setIntegrationTest('OpenSubtitles ligado. As legendas PT-PT aparecem primeiro no leitor.', 'success');
-    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+      setSectionTest('opensubtitles')('OpenSubtitles ligado. As legendas PT-PT aparecem primeiro no leitor.', 'success');
+    } catch (error) { setSectionTest('opensubtitles')(getError(error), 'error'); }
   };
 
   const grabRelease = async (release) => {
@@ -2082,29 +2084,34 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <label className="input-label" htmlFor="prowlarr-url">Endereço do Prowlarr</label><input id="prowlarr-url" className="text-input" type="url" placeholder="http://localhost:9696" value={integrationForm.prowlarrUrl} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="prowlarr-key">API key do Prowlarr</label><input id="prowlarr-key" className="text-input" type="password" autoComplete="off" placeholder="Settings > General > Security" value={integrationForm.prowlarrApiKey} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrApiKey: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testProwlarr}>Testar Prowlarr</button>
+            {sectionTestLine('prowlarr')}
 
             <div className="integration-group-title">Shelfarr (livros)</div>
             <small className="integration-help">Liga o teu Shelfarr para pedir livros e audiolivros a partir da aba Livros. As fontes são as que configuraste no Shelfarr. Gera o token em Perfil &gt; API tokens (permissões de pesquisa e pedidos).</small>
             <label className="input-label" htmlFor="shelfarr-url">Endereço do Shelfarr</label><input id="shelfarr-url" className="text-input" type="url" placeholder="http://localhost:5056" value={integrationForm.shelfarrUrl || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="shelfarr-token">Token do Shelfarr</label><input id="shelfarr-token" className="text-input" type="password" autoComplete="off" placeholder="shf_…" value={integrationForm.shelfarrToken || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrToken: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testShelfarr}>Testar Shelfarr</button>
+            {sectionTestLine('shelfarr')}
 
             <div className="integration-group-title">Audiobookshelf (audiolivros)</div>
             <small className="integration-help">O Audiobookshelf mostra e toca os audiolivros que estão nas pastas do teu servidor; não usa indexadores. O token copia-se na interface dele: Configuração &gt; Utilizadores &gt; a tua conta.</small>
             <label className="input-label" htmlFor="abs-url">Endereço do Audiobookshelf</label><input id="abs-url" className="text-input" type="url" placeholder="http://100.x.y.z:13378" value={integrationForm.audiobookshelfUrl || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, audiobookshelfUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="abs-token">Token do Audiobookshelf</label><input id="abs-token" className="text-input" type="password" autoComplete="off" placeholder="Token / API key" value={integrationForm.audiobookshelfToken || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, audiobookshelfToken: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testAudiobookshelf}>Testar Audiobookshelf</button>
+            {sectionTestLine('audiobookshelf')}
 
             <div className="integration-group-title">TMDB</div>
             <small className="integration-help">Cria uma API key nas definições da conta TMDB. Esta ligação atualiza os títulos, imagens e tendências.</small>
             <label className="input-label" htmlFor="tmdb-key">API key do TMDB</label><input id="tmdb-key" className="text-input" type="password" autoComplete="off" placeholder="API Read Access Token" value={integrationForm.tmdbApiKey || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, tmdbApiKey: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testTmdb}>Testar TMDB</button>
+            {sectionTestLine('tmdb')}
 
             <div className="integration-group-title">Spotify (opcional)</div>
             <small className="integration-help">Cria uma app em developer.spotify.com e cola aqui o Client ID e o Client Secret. Melhora a aba Música; sem isto é usado o iTunes. Para ouvir com a tua conta Premium (comando remoto), adiciona também http://127.0.0.1:8898/callback como Redirect URI da app e liga a conta no ecrã de um álbum.</small>
             <label className="input-label" htmlFor="spotify-id">Client ID</label><input id="spotify-id" className="text-input" autoComplete="off" placeholder="Client ID do Spotify" value={integrationForm.spotifyClientId || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientId: event.target.value }))}/>
             <label className="input-label" htmlFor="spotify-secret">Client Secret</label><input id="spotify-secret" className="text-input" type="password" autoComplete="off" placeholder="Client Secret do Spotify" value={integrationForm.spotifyClientSecret || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, spotifyClientSecret: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testSpotify}>Testar Spotify</button>
+            {sectionTestLine('spotify')}
 
             <div className="integration-group-title">OpenSubtitles</div>
             <small className="integration-help">A API key e as credenciais da conta OpenSubtitles são necessárias para pesquisar e descarregar legendas.</small>
@@ -2112,8 +2119,9 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <label className="input-label" htmlFor="opensubtitles-user">Nome de utilizador</label><input id="opensubtitles-user" className="text-input" autoComplete="username" placeholder="Utilizador da conta" value={integrationForm.openSubtitlesUsername || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, openSubtitlesUsername: event.target.value }))}/>
             <label className="input-label" htmlFor="opensubtitles-password">Palavra-passe</label><input id="opensubtitles-password" className="text-input" type="password" autoComplete="new-password" placeholder="Palavra-passe da conta" value={integrationForm.openSubtitlesPassword || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, openSubtitlesPassword: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testOpenSubtitles}>Testar OpenSubtitles</button>
+            {sectionTestLine('opensubtitles')}
 
-            <div className="integration-test-line">{integrationTestState.text && <span className={`is-${integrationTestState.kind}`}>{integrationTestState.text}</span>}</div>
+            {!integrationTestState.section && <div className="integration-test-line">{integrationTestState.text && <span className={`is-${integrationTestState.kind}`}>{integrationTestState.text}</span>}</div>}
             <div className="integration-actions"><span className="integration-help">As chaves são cifradas na app desktop.</span><button className="button button-primary"><Icon name="check" size={15}/>Guardar</button></div>
           </form>
           <div className="adult-setting"><span><strong>Pesquisa de conteúdo adulto</strong><small>Ativa a categoria Adulto (Whisparr) no menu e nas pesquisas.</small></span><input type="checkbox" checked={adultEnabled} onChange={(event) => toggleAdultSearch(event.target.checked)} aria-label="Ativar pesquisa de conteúdo adulto"/></div>
