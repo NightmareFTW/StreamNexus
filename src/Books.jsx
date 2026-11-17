@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { pkey } from './profiles.js';
 import { Icon, PosterCard } from './ui.jsx';
 
@@ -211,5 +211,46 @@ export function BookSourcesPanel({ state, onOpen }) {
         <div><button className="button button-primary button-sm" onClick={() => onOpen(librivox.url)}>Ouvir / descarregar</button></div></div>}
       {nothing && <p className="rd-empty-text">Não há versão digital gratuita e legal deste livro. Podes tentar a pesquisa nos indexadores abaixo.</p>}
     </div>}
+  </section>;
+}
+
+// Pedido ao teu Shelfarr: a app só envia o pedido e mostra o estado; o Shelfarr trata do resto com as fontes que configuraste.
+export function ShelfarrPanel({ book, configured, onNotify }) {
+  const [state, setState] = useState({ status: 'idle', requests: [], busy: '' });
+  const author = (book.creator || '').split(',')[0];
+  const load = () => window.streamnexus?.shelfarrRequests?.({ title: book.title, author })
+    .then((requests) => setState((current) => ({ ...current, status: 'ready', requests: [...requests, ...current.requests.filter((old) => !requests.some((item) => item.id === old.id))] })))
+    .catch(() => setState((current) => ({ ...current, status: 'error' })));
+  useEffect(() => {
+    if (!configured || !window.streamnexus?.isDesktop) return undefined;
+    setState({ status: 'loading', requests: [], busy: '' });
+    load();
+    return undefined;
+  }, [book.id, configured]);
+  if (!configured || !window.streamnexus?.isDesktop) return null;
+  const request = async (bookType) => {
+    setState((current) => ({ ...current, busy: bookType }));
+    try {
+      const result = await window.streamnexus.shelfarrRequestBook({ title: book.title, author, year: book.year, bookType });
+      onNotify?.(`Pedido enviado ao Shelfarr: ${result.title}.`);
+      setState((current) => ({ ...current, busy: '', requests: [...result.requests, ...current.requests] }));
+      load();
+    } catch (error) {
+      setState((current) => ({ ...current, busy: '' }));
+      onNotify?.(error?.message || 'Não foi possível pedir ao Shelfarr.', 'error');
+    }
+  };
+  const has = (type) => state.requests.some((item) => item.bookType === type && item.status !== 'failed' && item.status !== 'not_found');
+  return <section className="easy-sources">
+    <span className="eyebrow">PEDIR AO SHELFARR</span>
+    <div className="easy-list">
+      <div className="easy-row"><span><strong>O teu Shelfarr</strong><small>Envia o pedido e acompanha o estado aqui.</small></span>
+        <div>
+          <button className="button button-primary button-sm" disabled={Boolean(state.busy) || has('ebook')} onClick={() => request('ebook')}>{state.busy === 'ebook' ? 'A enviar…' : 'Pedir ebook'}</button>
+          <button className="button button-quiet button-sm" disabled={Boolean(state.busy) || has('audiobook')} onClick={() => request('audiobook')}>{state.busy === 'audiobook' ? 'A enviar…' : 'Pedir audiolivro'}</button>
+        </div></div>
+      {state.requests.map((item) => <div key={item.id} className="easy-row"><span><strong>{item.bookType === 'audiobook' ? 'Audiolivro' : 'Ebook'}</strong><small>{item.statusLabel}{item.attention ? ' · precisa de atenção no Shelfarr' : ''}</small></span></div>)}
+      {state.status === 'error' && <p className="rd-empty-text">Não foi possível consultar o estado no Shelfarr.</p>}
+    </div>
   </section>;
 }

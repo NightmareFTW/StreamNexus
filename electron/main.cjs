@@ -90,6 +90,11 @@ async function writeStoredSession(value) {
   if (!value.access_token || !value.client_id || !value.client_secret || !value.refresh_token) {
     throw new Error('A sessão Real-Debrid está incompleta.');
   }
+  if (settings.shelfarrUrl) {
+    let url;
+    try { url = new URL(settings.shelfarrUrl); } catch { throw new Error('O endereço do Shelfarr não é válido.'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Usa um endereço HTTP ou HTTPS válido para o Shelfarr.');
+  }
   if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
   const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(value));
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -106,9 +111,9 @@ async function readIntegrations() {
     const encrypted = await fs.readFile(integrationsFilePath());
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('O armazenamento seguro do Windows não está disponível.');
     const { result } = await safeStorage.decryptStringAsync(encrypted);
-    return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
+    return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '', ...JSON.parse(result) };
   } catch (error) {
-    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
+    if (error.code === 'ENOENT') return { prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' };
     throw error;
   }
 }
@@ -117,6 +122,8 @@ async function writeIntegrations(value) {
   const settings = {
     prowlarrUrl: String(value?.prowlarrUrl || '').trim().replace(/\/+$/, ''),
     prowlarrApiKey: String(value?.prowlarrApiKey || '').trim(),
+    shelfarrUrl: String(value?.shelfarrUrl || '').trim().replace(/\/+$/, ''),
+    shelfarrToken: String(value?.shelfarrToken || '').trim(),
     tmdbApiKey: String(value?.tmdbApiKey || '').trim(),
     spotifyClientId: String(value?.spotifyClientId || '').trim(),
     spotifyClientSecret: String(value?.spotifyClientSecret || '').trim(),
@@ -2331,6 +2338,65 @@ async function testProwlarr(value = {}) {
   return { version: status.version || '', appName: status.appName || 'Prowlarr' };
 }
 
+// ---- Shelfarr (o teu servidor de pedidos de livros): a app só pede e acompanha; as fontes são as que configuraste lá ----
+async function shelfarrCall(settings, method, resource, body) {
+  if (!settings.shelfarrUrl || !settings.shelfarrToken) throw new Error('Configura o endereço e o token do Shelfarr nas definições.');
+  let response;
+  try {
+    response = await fetch(pURL(settings.shelfarrUrl, `api/v1/${resource}`), {
+      method,
+      headers: { Authorization: `Bearer ${settings.shelfarrToken}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch { throw new Error('Não consegui contactar o Shelfarr. Confirma o endereço e se está ligado.'); }
+  const data = await response.json().catch(() => null);
+  if (response.status === 401) throw new Error('O Shelfarr recusou o token. Gera outro em Perfil > API tokens.');
+  if (response.status === 403) throw new Error(data?.errors?.[0] || 'O token do Shelfarr não tem permissões suficientes.');
+  if (!response.ok && response.status !== 202) throw new Error(data?.errors?.[0] || `O Shelfarr respondeu com erro ${response.status}.`);
+  return data || {};
+}
+
+const SHELFARR_STATUS = { pending: 'Pendente', searching: 'A procurar', awaiting_purchase: 'À espera de compra', not_found: 'Não encontrado', downloading: 'A descarregar', processing: 'A processar', completed: 'Concluído', failed: 'Falhou' };
+function shelfarrRequestInfo(item) {
+  return { id: item.id, status: item.status, statusLabel: SHELFARR_STATUS[item.status] || item.status, attention: Boolean(item.attention_needed), title: item.book?.title || '', author: item.book?.author || '', bookType: item.book?.book_type || '' };
+}
+const shelfarrNorm = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+async function testShelfarr(value = {}) {
+  const settings = { shelfarrUrl: String(value.shelfarrUrl || '').trim().replace(/\/+$/, ''), shelfarrToken: String(value.shelfarrToken || '').trim() };
+  let parsed;
+  try { parsed = new URL(settings.shelfarrUrl); } catch { throw new Error('O endereço do Shelfarr não é válido.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !settings.shelfarrToken) throw new Error('Indica um endereço HTTP/HTTPS e um token do Shelfarr.');
+  await shelfarrCall(settings, 'GET', 'requests?limit=1');
+  return { ok: true };
+}
+
+async function shelfarrBookRequests({ title, author } = {}) {
+  const settings = await readIntegrations();
+  const data = await shelfarrCall(settings, 'GET', 'requests?limit=100');
+  const wanted = shelfarrNorm(title);
+  return (data.requests || []).map(shelfarrRequestInfo).filter((item) => wanted && shelfarrNorm(item.title) === wanted && (!author || !item.author || shelfarrNorm(item.author).includes(shelfarrNorm(author).split(' ')[0] || '')));
+}
+
+async function shelfarrRequestBook({ title, author, year, bookType } = {}) {
+  const settings = await readIntegrations();
+  const type = bookType === 'audiobook' ? 'audiobook' : 'ebook';
+  const query = [title, author].filter(Boolean).join(' ').trim();
+  if (!query) throw new Error('Falta o título do livro.');
+  const found = await shelfarrCall(settings, 'GET', `search?q=${encodeURIComponent(query)}&limit=10`);
+  const wanted = shelfarrNorm(title);
+  const results = found.results || [];
+  const match = results.find((item) => shelfarrNorm(item.title) === wanted && (type === 'audiobook' ? item.has_audiobook !== false : item.has_ebook !== false)) || results.find((item) => shelfarrNorm(item.title) === wanted) || results[0];
+  if (!match?.work_id) throw new Error('O Shelfarr não encontrou este livro no catálogo dele.');
+  const created = await shelfarrCall(settings, 'POST', 'requests', {
+    work_id: match.work_id, book_type: type, title: match.title || title, author: match.author || author || '',
+    ...(match.cover_url ? { cover_url: match.cover_url } : {}), ...(match.year || year ? { year: match.year || year } : {}), content_kind: match.content_kind || undefined,
+  });
+  if (created.errors?.length && !created.requests?.length) throw new Error(created.errors[0]);
+  return { requests: (created.requests || []).map(shelfarrRequestInfo), warnings: created.warnings || [], title: match.title || title };
+}
+
 async function fetchReleaseMagnet(entry) {
   const { release, baseUrl, apiKey } = entry;
   const magnet = releaseMagnet(release);
@@ -2590,6 +2656,9 @@ function registerIpc() {
   ipcMain.handle('integrations:write', (_event, value) => writeIntegrations(value));
   ipcMain.handle('prowlarr:search', resultHandler(searchProwlarr));
   ipcMain.handle('prowlarr:test', resultHandler(testProwlarr));
+  ipcMain.handle('shelfarr:test', resultHandler(testShelfarr));
+  ipcMain.handle('shelfarr:requests', resultHandler(shelfarrBookRequests));
+  ipcMain.handle('shelfarr:request', resultHandler(shelfarrRequestBook));
   ipcMain.handle('torrentio:releases', resultHandler(fetchTorrentioReleases));
   ipcMain.handle('tmdb:tv', resultHandler(fetchTmdbTv));
   ipcMain.handle('home:schedule', resultHandler(fetchHomeSchedule));

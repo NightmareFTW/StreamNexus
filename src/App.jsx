@@ -13,7 +13,7 @@ import { LiveTvPage, TvModeTabs } from './LiveTv.jsx';
 import { FreeMusicPanel, SpotifyConnectBox } from './Music.jsx';
 import { MiniPlayer } from './MiniPlayer.jsx';
 import { FeedShelves, SearchFeed, setFeedFilter } from './Feed.jsx';
-import { BookSourcesPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
+import { BookSourcesPanel, ShelfarrPanel, BooksCollectionView, BooksNav, READING_KEY, READING_STATUS, ReadingDashboard, dayKey, loadReading } from './Books.jsx';
 import { ADULT_CATEGORIES, AdultModeTabs, AdultVideosPage } from './AdultVideos.jsx';
 
 const RD_API = 'https://api.real-debrid.com/rest/1.0';
@@ -348,8 +348,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [rdSearch, setRdSearch] = useState(null);
   const [releaseSearch, setReleaseSearch] = useState(null);
   const [releaseBusyId, setReleaseBusyId] = useState('');
-  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
-  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationSettings, setIntegrationSettings] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
+  const [integrationForm, setIntegrationForm] = useState({ prowlarrUrl: '', prowlarrApiKey: '', shelfarrUrl: '', shelfarrToken: '', tmdbApiKey: '', spotifyClientId: '', spotifyClientSecret: '', openSubtitlesApiKey: '', openSubtitlesUsername: '', openSubtitlesPassword: '' });
   const [integrationTestState, setIntegrationTestState] = useState({ text: '', kind: 'info' });
   const setIntegrationTest = useCallback((text, kind = 'info') => setIntegrationTestState({ text, kind }), []);
   const [catalogTitles, setCatalogTitles] = useState(() => (profile.kids ? titles.filter(kidsAllowed) : titles));
@@ -1601,6 +1601,8 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         ...integrationForm,
         prowlarrUrl: integrationForm.prowlarrUrl.trim().replace(/\/+$/, ''),
         prowlarrApiKey: integrationForm.prowlarrApiKey.trim(),
+        shelfarrUrl: (integrationForm.shelfarrUrl || '').trim().replace(/\/+$/, ''),
+        shelfarrToken: (integrationForm.shelfarrToken || '').trim(),
         tmdbApiKey: integrationForm.tmdbApiKey.trim(),
         spotifyClientId: (integrationForm.spotifyClientId || '').trim(),
         spotifyClientSecret: (integrationForm.spotifyClientSecret || '').trim(),
@@ -1612,7 +1614,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       setIntegrationSettings(next);
       setIntegrationForm(next);
       setIntegrationTest('Configuração guardada.', 'success');
-      notify('Prowlarr configurado.');
+      notify('Integrações guardadas.');
     } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
@@ -1628,6 +1630,15 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         if (!response.ok) throw new Error(`Prowlarr respondeu com erro ${response.status}.`);
       }
       setIntegrationTest('Ligação concluída. Prowlarr está acessível.', 'success');
+    } catch (error) { setIntegrationTest(getError(error), 'error'); }
+  };
+
+  const testShelfarr = async () => {
+    setIntegrationTest('A testar Shelfarr…');
+    try {
+      if (!window.streamnexus?.isDesktop) throw new Error('O teste do Shelfarr só funciona na app desktop.');
+      await window.streamnexus.testShelfarr({ shelfarrUrl: (integrationForm.shelfarrUrl || '').trim(), shelfarrToken: (integrationForm.shelfarrToken || '').trim() });
+      setIntegrationTest('Ligação concluída. O Shelfarr aceitou o token.', 'success');
     } catch (error) { setIntegrationTest(getError(error), 'error'); }
   };
 
@@ -1939,6 +1950,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <div className="detail-divider"></div>
             <div className="detail-facts"><span><small>TÍTULO ORIGINAL</small><strong>{selectedTitle.original}</strong></span><span><small>GÉNERO</small><strong>{(selectedTitle.genres || [selectedTitle.genre]).join(', ')}</strong></span>{selectedTitle.creator ? <span><small>{selectedTitle.type === 'Álbum' ? 'ARTISTA' : 'AUTOR'}</small><strong>{selectedTitle.creator}</strong></span> : <span><small>AVALIAÇÃO</small><strong>★ {selectedTitle.rating} / 10</strong></span>}</div>
             {selectedTitle.type === 'Série' && selectedTitle.tmdbId && <EpisodePicker title={selectedTitle} entry={watch[selectedTitle.id]} onPlay={(season, episode, options) => startPlayback(selectedTitle, { episode: { season, episode }, resumeAt: options?.resumeAt || 0 })} onToggleWatched={(season, episode, watched, name) => toggleEpisodeWatched(selectedTitle, season, episode, watched, name)}/>}
+            {selectedTitle.type === 'Livro' && <ShelfarrPanel book={selectedTitle} configured={Boolean(integrationSettings.shelfarrUrl && integrationSettings.shelfarrToken)} onNotify={notify}/>}
             {selectedTitle.type === 'Livro' && <BookSourcesPanel state={bookSources.id === selectedTitle.id ? bookSources : { status: 'loading', data: null }} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
             {selectedTitle.type === 'Álbum' && <SpotifyConnectBox album={selectedTitle} onNotify={notify} activeUri={mini?.mode === 'spotify' ? spotifyNow : ''} onListen={(options) => listenOnSpotify(selectedTitle, options)}/>}
             {selectedTitle.type === 'Álbum' && <FreeMusicPanel state={musicSources.id === selectedTitle.id ? musicSources : { status: 'loading', data: null }} activeUrl={mini?.mode === 'tracks' ? mini.tracks[mini.index]?.url : ''} onPlay={(queue, index) => playTracks(queue, index, selectedTitle)} onOpen={(url) => window.streamnexus?.openLink?.(url)?.catch((error) => notify(getError(error), 'error'))}/>}
@@ -1976,6 +1988,12 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <label className="input-label" htmlFor="prowlarr-url">Endereço do Prowlarr</label><input id="prowlarr-url" className="text-input" type="url" placeholder="http://localhost:9696" value={integrationForm.prowlarrUrl} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrUrl: event.target.value }))}/>
             <label className="input-label" htmlFor="prowlarr-key">API key do Prowlarr</label><input id="prowlarr-key" className="text-input" type="password" autoComplete="off" placeholder="Settings > General > Security" value={integrationForm.prowlarrApiKey} onChange={(event) => setIntegrationForm((current) => ({ ...current, prowlarrApiKey: event.target.value }))}/>
             <button type="button" className="button button-quiet integration-test-button" onClick={testProwlarr}>Testar Prowlarr</button>
+
+            <div className="integration-group-title">Shelfarr (livros)</div>
+            <small className="integration-help">Liga o teu Shelfarr para pedir livros e audiolivros a partir da aba Livros. As fontes são as que configuraste no Shelfarr. Gera o token em Perfil &gt; API tokens (permissões de pesquisa e pedidos).</small>
+            <label className="input-label" htmlFor="shelfarr-url">Endereço do Shelfarr</label><input id="shelfarr-url" className="text-input" type="url" placeholder="http://localhost:5056" value={integrationForm.shelfarrUrl || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrUrl: event.target.value }))}/>
+            <label className="input-label" htmlFor="shelfarr-token">Token do Shelfarr</label><input id="shelfarr-token" className="text-input" type="password" autoComplete="off" placeholder="shf_…" value={integrationForm.shelfarrToken || ''} onChange={(event) => setIntegrationForm((current) => ({ ...current, shelfarrToken: event.target.value }))}/>
+            <button type="button" className="button button-quiet integration-test-button" onClick={testShelfarr}>Testar Shelfarr</button>
 
             <div className="integration-group-title">TMDB</div>
             <small className="integration-help">Cria uma API key nas definições da conta TMDB. Esta ligação atualiza os títulos, imagens e tendências.</small>
