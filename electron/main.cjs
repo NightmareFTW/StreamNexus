@@ -248,7 +248,17 @@ const discoveryCache = new Map();
 const MEDIA_ACCENTS = ['#8f71fc', '#c28d5d', '#68727c', '#b44c7c', '#627c89', '#759065', '#9d454d', '#729caa'];
 
 async function fetchPublicJson(url, timeoutMs = 20000) {
-  const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' }, signal: AbortSignal.timeout(timeoutMs) });
+  // Falhas de rede passageiras (ligação cortada, DNS) repetem-se uma vez; o motivo real vai na mensagem de erro.
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' }, signal: AbortSignal.timeout(timeoutMs) });
+      break;
+    } catch (error) {
+      if (attempt >= 1) throw new Error(`Não consegui contactar ${new URL(url).hostname} (${error.cause?.code || error.cause?.message || error.message}).`);
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+  }
   if (!response.ok) throw new Error(`O serviço respondeu com erro ${response.status}.`);
   return response.json();
 }
