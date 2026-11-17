@@ -20,7 +20,7 @@ export function snapshotTitle(title) {
     id: title.id, type: title.type, title: title.title, original: title.original || title.title, year: title.year || '',
     poster: title.poster || '', backdrop: title.backdrop || title.poster || '', tmdbId: title.tmdbId, tmdbType: title.tmdbType,
     genre: title.genre || '', genres: title.genres || [], rating: title.rating || '', runtime: title.runtime || '',
-    description: String(title.description || '').slice(0, 400), accent: title.accent || '#b30d1b',
+    description: String(title.description || '').slice(0, 400), accent: title.accent || '#b30d1b', adult: Boolean(title.adult),
   };
 }
 
