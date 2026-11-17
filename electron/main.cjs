@@ -156,7 +156,11 @@ async function writeIntegrations(value) {
 
 async function tmdbRequest(resource, apiKey) {
   const url = new URL(`${TMDB_API}${resource}`);
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } });
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try { response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) }); break; }
+    catch (error) { if (attempt >= 1) throw new Error(`Não consegui contactar o TMDB (${error.cause?.code || error.cause?.message || error.name || error.message}).`); await new Promise((resolve) => setTimeout(resolve, 600)); }
+  }
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.status_message || `TMDB respondeu com erro ${response.status}.`);
   return data;
@@ -255,16 +259,25 @@ const DISCOVERY_TTL = 10 * 60 * 1000;
 const discoveryCache = new Map();
 const MEDIA_ACCENTS = ['#8f71fc', '#c28d5d', '#68727c', '#b44c7c', '#627c89', '#759065', '#9d454d', '#729caa'];
 
-async function fetchPublicJson(url, timeoutMs = 20000) {
-  // Falhas de rede passageiras (ligação cortada, DNS) repetem-se uma vez; o motivo real vai na mensagem de erro.
+// Servidores públicos lentos não podem prender a app: tempo limite curto, uma repetição só para falhas rápidas
+// (ligação cortada) e, depois de uma falha, o mesmo servidor falha logo durante 45 s em vez de fazer esperar de novo.
+const hostCooldown = new Map();
+async function fetchPublicJson(url, timeoutMs = 12000) {
+  const host = new URL(url).hostname;
+  if ((hostCooldown.get(host) || 0) > Date.now()) throw new Error(`${host} não está a responder agora. Tenta de novo daqui a pouco.`);
   let response;
   for (let attempt = 0; ; attempt += 1) {
+    const startedAt = Date.now();
     try {
       response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'StreamNexus/0.1' }, signal: AbortSignal.timeout(timeoutMs) });
       break;
     } catch (error) {
-      if (attempt >= 1) throw new Error(`Não consegui contactar ${new URL(url).hostname} (${error.cause?.code || error.cause?.message || error.message}).`);
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      const slow = Date.now() - startedAt > 4000;
+      if (attempt >= 1 || slow) {
+        hostCooldown.set(host, Date.now() + 45000);
+        throw new Error(`Não consegui contactar ${host} (${error.cause?.code || error.cause?.message || error.name || error.message}).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 600));
     }
   }
   if (!response.ok) throw new Error(`O serviço respondeu com erro ${response.status}.`);
