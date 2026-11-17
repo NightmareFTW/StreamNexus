@@ -146,7 +146,16 @@ function scoreRelease(release, title, episode = null) {
   return score;
 }
 
-const friendlyRdError = (message, tried = 0) => (/infringing_file/i.test(message) ? `O Real-Debrid recusou ${tried > 1 ? `as ${tried} versões que tentei` : 'este ficheiro'} (erro de infração). Desde 2026 filtra pelo nome do lançamento (WEB-DL, WEBRip, BDRip, HDRip…) e, depois de vários pedidos seguidos, pode recusar tudo durante alguns minutos. Espera um pouco e tenta de novo, ou escolhe à mão uma versão BluRay/Remux na lista do filme.` : message);
+const friendlyRdError = (message, tried = 0) => {
+  const text = String(message || '');
+  if (/infringing_file/i.test(text)) return `O Real-Debrid recusou ${tried > 1 ? `as ${tried} versões que tentei` : 'este ficheiro'} (erro de infração). Desde 2026 filtra pelo nome do lançamento (WEB-DL, WEBRip, BDRip, HDRip…) e, depois de vários pedidos seguidos, pode recusar tudo durante alguns minutos. Espera um pouco e tenta de novo, ou escolhe à mão uma versão BluRay/Remux na lista do filme.`;
+  if (/hoster[ _]not[ _]free|not[ _]premium|premium[ _]only|free[ _]users|account[ _]locked|permission[ _]denied/i.test(text)) return 'O Real-Debrid recusou o pedido: a conta ligada nesta app não tem Premium ativo (ou está bloqueada). Confirma em real-debrid.com se o Premium está ativo. Cada pessoa precisa da sua própria conta paga.';
+  if (/hoster[ _](temporarily[ _])?unavailable|hoster[ _]limit|hoster[ _]maintenance|unsupported[ _]hoster|service[ _]unavailable|file[ _]unavailable/i.test(text)) return 'O Real-Debrid não conseguiu obter este ficheiro agora (“hoster indisponível”): o servidor de onde vem está em baixo, em manutenção ou o ficheiro já não existe. Escolhe outra versão na lista ou tenta daqui a pouco. Se acontecer com tudo, confirma que a tua conta tem Premium ativo.';
+  if (/ip[ _]address[ _]not[ _]allowed|ip[ _]not[ _]allowed/i.test(text)) return 'O Real-Debrid bloqueou o teu endereço IP (VPN ou várias ligações ao mesmo tempo). Desliga a VPN e tenta de novo.';
+  if (/traffic[ _]exhausted|fair[ _]usage/i.test(text)) return 'O Real-Debrid indica que o limite de tráfego da conta foi atingido. Tenta mais tarde.';
+  if (/too[ _]many[ _]active/i.test(text)) return 'A conta Real-Debrid tem demasiadas transferências ativas. Remove algumas no site do Real-Debrid e tenta de novo.';
+  return message;
+};
 const RD_STATUS_TEXT = { magnet_conversion: 'A obter os metadados do torrent', waiting_files_selection: 'A escolher o ficheiro de vídeo', queued: 'Na fila do Real-Debrid', downloading: 'A transferir no Real-Debrid', compressing: 'A comprimir', uploading: 'A preparar o ficheiro', downloaded: 'Pronto' };
 
 const titles = [
@@ -1047,7 +1056,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       } catch (error) {
         if (cancelled) return;
         const message = friendlyRdError(getError(error), (playing.candidates?.length || 0) || (playing.candidateIndex || 0) + 1);
-        const final = /infringing|bloquead|blocked|not_available|file_unavailable|permission_denied/i.test(`${getError(error)} ${message}`);
+        const final = /infringing|bloquead|blocked|not_available|file_unavailable|permission_denied|hoster|premium|ip[ _]address|traffic|fair[ _]usage|too[ _]many/i.test(`${getError(error)} ${message}`);
         setPlaying((current) => current?.torrentId === playing.torrentId ? { ...current, error: message, ...(final ? { pending: false } : {}) } : current);
         if (!final) timer = window.setTimeout(poll, 12000);
       }
