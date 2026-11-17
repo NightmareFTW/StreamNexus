@@ -1630,6 +1630,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
       setSearchCategory('movies');
       setReleaseSearch(null);
     }
+    if (!enabled && activePage === 'adult') { setActivePage('home'); setQuery(''); }
   };
 
   const selectedTitle = catalogTitles.find((item) => item.id === modal?.id) || discoveryLookup.find((item) => item.id === modal?.id) || Object.values(reading.shelf).map((entry) => entry.book).find((item) => item.id === modal?.id) || savedItems[modal?.id] || (modal?.item && modal.item.id === modal.id ? modal.item : undefined);
@@ -1980,7 +1981,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
         </form>
         <div className="side-section">
           <nav className="side-nav" aria-label="Navegação principal">
-            {nav.filter((item) => !kids || !['adult', 'tv', 'indexers'].includes(item.id)).map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
+            {nav.filter((item) => (!kids || !['adult', 'tv', 'indexers'].includes(item.id)) && (item.id !== 'adult' || adultEnabled)).map((item) => <button key={item.id} className={`nav-item ${activePage === item.id ? 'active' : ''}`} onClick={() => { setActivePage(item.id); setQuery(''); setGenre('Todos'); setProfileMenuOpen(false); if (item.id === 'indexers') { setSearchCategory('movies'); setReleaseSearch(null); } }}><Icon name={item.icon} size={18}/><span>{item.label}</span></button>)}
           </nav>
         </div>
         <div className="profile-menu-wrap header-profile" ref={profileMenuRef}>
