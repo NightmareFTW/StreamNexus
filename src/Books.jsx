@@ -249,7 +249,7 @@ export function ShelfarrPanel({ book, configured, onNotify }) {
           <button className="button button-primary button-sm" disabled={Boolean(state.busy) || has('ebook')} onClick={() => request('ebook')}>{state.busy === 'ebook' ? 'A enviar…' : 'Pedir ebook'}</button>
           <button className="button button-quiet button-sm" disabled={Boolean(state.busy) || has('audiobook')} onClick={() => request('audiobook')}>{state.busy === 'audiobook' ? 'A enviar…' : 'Pedir audiolivro'}</button>
         </div></div>
-      {state.requests.map((item) => <div key={item.id} className="easy-row"><span><strong>{item.bookType === 'audiobook' ? 'Audiolivro' : 'Ebook'}</strong><small>{item.statusLabel}{item.attention ? ' · precisa de atenção no Shelfarr' : ''}</small></span></div>)}
+      {state.requests.map((item) => <div key={item.id} className="easy-row"><span><strong>{item.bookType === 'audiobook' ? 'Audiolivro' : item.bookType === 'ebook' ? 'Ebook' : item.bookType}</strong><small>{item.statusLabel}{item.attention ? ' · precisa de atenção no Shelfarr' : ''}</small></span></div>)}
       {state.status === 'error' && <p className="rd-empty-text">Não foi possível consultar o estado no Shelfarr.</p>}
     </div>
   </section>;

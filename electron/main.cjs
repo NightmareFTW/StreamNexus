@@ -2403,8 +2403,16 @@ async function shelfarrRequestBook({ title, author, year, bookType } = {}) {
   const results = found.results || [];
   const match = results.find((item) => shelfarrNorm(item.title) === wanted && (type === 'audiobook' ? item.has_audiobook !== false : item.has_ebook !== false)) || results.find((item) => shelfarrNorm(item.title) === wanted) || results[0];
   if (!match?.work_id) throw new Error('O Shelfarr não encontrou este livro no catálogo dele.');
+  // Banda desenhada e manga têm tipos próprios no Shelfarr: usa os que ele declara para este título.
+  const available = Array.isArray(match.available_book_types) ? match.available_book_types.map(String) : [];
+  let requestType = type;
+  if (available.length && !available.includes(type)) {
+    const alternative = type === 'ebook' ? available.find((name) => name !== 'audiobook') : null;
+    if (!alternative) throw new Error(`O Shelfarr só aceita este título como: ${available.join(', ')}.`);
+    requestType = alternative;
+  }
   const created = await shelfarrCall(settings, 'POST', 'requests', {
-    work_id: match.work_id, book_type: type, title: match.title || title, author: match.author || author || '',
+    work_id: match.work_id, book_type: requestType, title: match.title || title, author: match.author || author || '',
     ...(match.cover_url ? { cover_url: match.cover_url } : {}), ...(match.year || year ? { year: match.year || year } : {}), content_kind: match.content_kind || undefined,
   });
   if (created.errors?.length && !created.requests?.length) throw new Error(created.errors[0]);
