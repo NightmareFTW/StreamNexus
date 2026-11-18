@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('streamnexus', Object.freeze({
   absContinue: () => invokeRequest('abs:continue'),
   absPlay: (value) => invokeRequest('abs:play', value),
   absSync: (value) => invokeRequest('abs:sync', value),
+  resetInstallation: (value) => invokeRequest('app:reset', value),
   testShelfarr: (value) => invokeRequest('shelfarr:test', value),
   shelfarrRequests: (value) => invokeRequest('shelfarr:requests', value),
   shelfarrRequestBook: (value) => invokeRequest('shelfarr:request', value),

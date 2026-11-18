@@ -2716,6 +2716,33 @@ async function absSync({ sessionId, currentTime, timeListened, duration } = {}) 
   return { ok: true };
 }
 
+// ---- Repor esta instalação: apaga os dados locais (só neste PC) e volta ao estado de instalação nova ----
+async function resetInstallation({ keepProfiles = false } = {}) {
+  const relaunching = app.isPackaged;
+  resetInProgress = true;
+  setTimeout(async () => {
+    const windows = BrowserWindow.getAllWindows();
+    if (keepProfiles) {
+      // Mantém perfis e histórico: tira só as contas ligadas e volta a mostrar as boas-vindas.
+      for (const win of windows) {
+        try { await win.webContents.executeJavaScript("['streamnexus.rd.session.v1','streamnexus.welcomeDone'].forEach((key) => localStorage.removeItem(key)); sessionStorage.removeItem('streamnexus.integrations'); true"); } catch { /* janela já fechada */ }
+      }
+    }
+    for (const win of windows) { try { win.destroy(); } catch { /* já destruída */ } }
+    const dir = app.getPath('userData');
+    for (const file of [SESSION_FILE, INTEGRATIONS_FILE, SPOTIFY_USER_FILE, 'spotify-player.log']) await fs.rm(path.join(dir, file), { force: true }).catch(() => {});
+    await fs.rm(path.join(app.getPath('temp'), 'StreamNexus-update'), { recursive: true, force: true }).catch(() => {});
+    const spotify = session.fromPartition('persist:streamnexus-spotify');
+    await spotify.clearStorageData().catch(() => {});
+    await spotify.clearCache().catch(() => {});
+    if (!keepProfiles) await session.defaultSession.clearStorageData().catch(() => {});
+    await session.defaultSession.clearCache().catch(() => {});
+    if (relaunching) app.relaunch();
+    app.exit(0);
+  }, 400);
+  return { relaunching };
+}
+
 async function fetchReleaseMagnet(entry) {
   const { release, baseUrl, apiKey } = entry;
   const magnet = releaseMagnet(release);
@@ -3000,6 +3027,7 @@ function registerIpc() {
   ipcMain.handle('feed:category', resultHandler(feedCategory));
   ipcMain.handle('adult:videos', resultHandler(fetchAdultVideos));
   ipcMain.handle('adult:media', resultHandler(resolveAdultMedia));
+  ipcMain.handle('app:reset', resultHandler(resetInstallation));
   ipcMain.handle('update:check', resultHandler(checkForUpdate));
   ipcMain.handle('update:install', resultHandler(installUpdate));
   ipcMain.handle('tv:countries', resultHandler(fetchLiveCountries));
@@ -3074,7 +3102,9 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createMainWindow(); });
 });
 
+let resetInProgress = false;
 app.on('window-all-closed', () => {
+  if (resetInProgress) return; // a reposição fecha as janelas e só depois sai, depois de apagar tudo
   if (process.platform !== 'darwin') app.quit();
 });
 

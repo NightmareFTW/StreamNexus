@@ -4,6 +4,7 @@ import { AdultPlayer } from './AdultPlayer.jsx';
 import { ProfileAvatar, ProfileGate } from './Profiles.jsx';
 import { InviteSettings, WelcomeScreen, welcomeDone } from './Invite.jsx';
 import { AudiobooksView, BooksModeSwitch } from './Audiobooks.jsx';
+import { ResetDialog, ResetSettings } from './Reset.jsx';
 import { EpisodePicker, HistoryPage } from './Watch.jsx';
 import { HomePage } from './Home.jsx';
 import { UpdateBanner, UpdateSettings } from './Update.jsx';
@@ -1546,6 +1547,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
   const [booksMode, setBooksMode] = useState(() => { try { return localStorage.getItem(pkey('streamnexus.books.mode')) === 'audio' ? 'audio' : 'ebooks'; } catch { return 'ebooks'; } });
   const changeBooksMode = (mode) => { setBooksMode(mode); try { localStorage.setItem(pkey('streamnexus.books.mode'), mode); } catch { /* só nesta sessão */ } };
   const [absLoading, setAbsLoading] = useState('');
+  const [resetOpen, setResetOpen] = useState(false);
   const playAudiobook = async (item) => {
     setAbsLoading(item.id);
     try {
@@ -2091,6 +2093,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
 
       {mini && <MiniPlayer key={mini.key} mini={mini} onProgress={rememberMusic} suspended={isPlayerOpen} hidden={activePage === 'home' && !query} onIndex={(index) => setMini((current) => (current ? { ...current, index } : current))} onClose={() => { if (mini.mode === 'spotify') window.streamnexus?.spotifyConnectCommand?.({ action: 'pause' }).catch(() => {}); setMini(null); }} onError={(message) => notify(message, 'error')} onRemote={(state) => setSpotifyNow(state?.uri || '')}/>}
       <UpdateBanner onNotify={notify}/>
+      {resetOpen && <ResetDialog onClose={() => setResetOpen(false)}/>}
       {notice && !isPlayerOpen && <div className={`toast is-${noticeKind}`} role={noticeKind === 'error' ? 'alert' : 'status'}><span className="toast-check"><Icon name={noticeKind === 'error' ? 'alert' : 'check'} size={14}/></span>{notice}</div>}
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { if (modal?.type === 'player') { setPlaying(null); setSubtitleTrackUrl(''); setActiveSubId(''); } setModal(null); setDeviceAuth(null); setDeviceStatus(''); } }}>
@@ -2193,6 +2196,7 @@ function AppShell({ profile, profiles, onSwitchProfile, onManageProfiles }) {
             <div className="integration-actions"><span className="integration-help">As chaves são cifradas na app desktop.</span><button className="button button-primary"><Icon name="check" size={15}/>Guardar</button></div>
           </form>
           <div className="adult-setting"><span><strong>Pesquisa de conteúdo adulto</strong><small>Ativa a categoria Adulto (Whisparr) no menu e nas pesquisas.</small></span><input type="checkbox" checked={adultEnabled} onChange={(event) => toggleAdultSearch(event.target.checked)} aria-label="Ativar pesquisa de conteúdo adulto"/></div>
+          <ResetSettings onOpen={() => setResetOpen(true)}/>
           <div className="readarr-note"><strong>Readarr</strong><span>O projeto foi descontinuado oficialmente em 2025. A pesquisa de livros continua disponível pela categoria Books no Prowlarr.</span></div>
           <p className="privacy-note"><Icon name="alert" size={14}/>{window.streamnexus?.isDesktop ? 'Todas as chaves e credenciais são guardadas cifradas com a proteção de credenciais do Windows.' : 'Nesta pré-visualização, as chaves ficam apenas nesta sessão do separador.'}</p>
           <section className="credits-panel"><strong>Créditos</strong><div><span className="tmdb-wordmark">TMDB</span><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></div></section>

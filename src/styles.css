@@ -1372,3 +1372,18 @@ html, body { background: #070707; }
 .subtitle-delay { flex-wrap: wrap; }
 .subtitle-align { display: grid; gap: 4px; justify-items: start; }
 .subtitle-align small { color: #8d8d97; font: 500 11px/1.4 'Manrope', sans-serif; }
+
+/* ---- Repor esta instalação ---- */
+.reset-settings { display: grid; gap: 8px; margin-top: 18px; }
+.reset-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.reset-backdrop { z-index: 1200; }
+.reset-dialog { display: grid; gap: 10px; padding: 26px 28px; width: min(560px, 94vw); max-height: 92vh; overflow: auto; text-align: left; }
+.reset-dialog h2 { margin: 0; }
+.reset-emblem { color: #ff8a8a; }
+.reset-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.reset-lists strong { color: #f1f1f4; font: 700 13px 'Manrope', sans-serif; }
+.reset-lists ul { margin: 6px 0 0; padding-left: 18px; color: #b3b3bc; font: 500 12px/1.5 'Manrope', sans-serif; }
+.reset-keep { display: flex; align-items: center; gap: 8px; color: #dcdce2; font: 500 13px 'Manrope', sans-serif; }
+.reset-tip { margin: 0; color: #8d8d97; font: 500 12px/1.5 'Manrope', sans-serif; }
+.reset-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+@media (max-width: 560px) { .reset-lists { grid-template-columns: 1fr; } }
