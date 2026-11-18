@@ -1387,3 +1387,20 @@ html, body { background: #070707; }
 .reset-tip { margin: 0; color: #8d8d97; font: 500 12px/1.5 'Manrope', sans-serif; }
 .reset-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 @media (max-width: 560px) { .reset-lists { grid-template-columns: 1fr; } }
+
+/* ---- Capa completa e centrada ao passar o rato (filmes e séries) ---- */
+/* O cartão é 16:9 (recorte centrado); com o rato por cima aparece a capa inteira, ampliada, por cima dos vizinhos. */
+.poster-card.poster-video { animation-fill-mode: backwards; }
+.poster-card.poster-video .poster-image img { object-position: 50% 50%; }
+.poster-card.poster-video .poster-full { position: absolute; left: 50%; top: 50%; z-index: 4; width: 142%; aspect-ratio: 2 / 3; transform: translate(-50%, -50%) scale(.72); opacity: 0; pointer-events: none; border-radius: 8px; overflow: hidden; box-shadow: 0 14px 38px rgba(0,0,0,.7); background: #0b0b0f; transition: opacity .2s ease, transform .22s ease; }
+.poster-card.poster-video .poster-full-bg { display: none; }
+.poster-card.poster-video .poster-full-img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
+.poster-card.poster-video:hover { z-index: 6; }
+.poster-card.poster-video:hover .poster-image, .poster-card.poster-video:focus-within .poster-image { overflow: visible; }
+.poster-card.poster-video:hover .poster-full, .poster-card.poster-video:focus-within .poster-full { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.poster-card.poster-video:hover .poster-shade, .poster-card.poster-video:hover .poster-hover-play, .poster-card.poster-video:hover .poster-type { opacity: 0; }
+.poster-card.poster-video:hover .poster-save { z-index: 7; opacity: 1; }
+/* a fila deixa de cortar a capa ampliada: espaço extra à volta, sem mexer no layout nem bloquear cliques */
+.poster-row { margin: -150px -44px; padding: 164px 44px 174px; scroll-padding-inline: 44px; pointer-events: none; }
+.poster-row > * { pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .poster-card.poster-video .poster-full { transition: opacity .01s; transform: translate(-50%, -50%); } }
